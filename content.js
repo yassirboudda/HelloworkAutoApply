@@ -2,7 +2,7 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  const VERSION = "1.0.0";
+  const VERSION = "1.0.1";
   let isRunning = false;
   let shouldStop = false;
 
@@ -147,23 +147,69 @@
     return true;
   }
 
-  function findApplyButton() {
+  function findApplyButton(opts = {}) {
+    const { exclude = null } = opts;
     const clickables = Array.from(document.querySelectorAll("button, a"));
     const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "postuler maintenant"];
     const blocked = ["alerte", "connexion", "se connecter", "inscrire", "compte"];
 
+    let best = null;
+    let bestScore = -1;
+
     for (const el of clickables) {
+      if (exclude && el === exclude) continue;
       if (el.offsetParent === null) continue;
       if (el.disabled) continue;
       const text = textOf(el).toLowerCase();
       if (!text) continue;
 
       if (wanted.some((w) => text.includes(w)) && !blocked.some((b) => text.includes(b))) {
-        return el;
+        let score = 1;
+        if (text.includes("je postule")) score += 6;
+        if (text.includes("postuler maintenant")) score += 4;
+        if (text.includes("envoyer ma candidature")) score += 5;
+        if (el.tagName === "BUTTON") score += 2;
+        if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
+        if (el.closest("#postuler")) score += 4;
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
       }
     }
 
-    return null;
+    return best;
+  }
+
+  async function tryApplyClickChain() {
+    const firstButton = findApplyButton();
+    if (!firstButton) return { ok: false, reason: "no_apply_button" };
+
+    const firstLabel = textOf(firstButton).slice(0, 100);
+    log(`1er clic postuler: ${firstLabel || "bouton sans libellé"}`);
+    await humanClick(firstButton);
+
+    // Short probe: many pages redirect quickly when first click is enough.
+    const probe = await waitForApplyOutcome(6000);
+    if (probe.outcome === "applied" || probe.outcome === "applied_or_followup" || probe.outcome === "error") {
+      return { ok: true, probe };
+    }
+
+    // If still on the offer page after first click, try a second apply button.
+    if (isOfferPage(window.location.href)) {
+      await sleep(jitter(500, 1200));
+      const secondButton = findApplyButton({ exclude: firstButton });
+      if (secondButton) {
+        const secondLabel = textOf(secondButton).slice(0, 100);
+        log(`2e clic postuler: ${secondLabel || "bouton sans libellé"}`);
+        await humanClick(secondButton);
+        const probe2 = await waitForApplyOutcome(12000);
+        return { ok: true, probe: probe2 };
+      }
+      log("Aucun 2e bouton postuler détecté après 1er clic", "warn");
+    }
+
+    return { ok: true, probe };
   }
 
   async function waitForApplyOutcome(timeoutMs = 25000) {
@@ -193,8 +239,8 @@
     const { title, company } = getOfferInfoFromDom();
     const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(session.currentOfferUrl || "");
 
-    const applyButton = findApplyButton();
-    if (!applyButton) {
+    const clickChain = await tryApplyClickChain();
+    if (!clickChain.ok && clickChain.reason === "no_apply_button") {
       await chrome.runtime.sendMessage({
         action: "markSkipped",
         jobId,
@@ -211,8 +257,11 @@
       return { applied: false, reason: "manual_mode" };
     }
 
-    await humanClick(applyButton);
-    const outcome = await waitForApplyOutcome();
+    let outcome = clickChain.probe || { outcome: "timeout" };
+    if (outcome.outcome === "timeout") {
+      // Final long wait in case redirect is slower on some offers.
+      outcome = await waitForApplyOutcome(18000);
+    }
 
     if (outcome.outcome === "applied" || outcome.outcome === "applied_or_followup") {
       await chrome.runtime.sendMessage({
