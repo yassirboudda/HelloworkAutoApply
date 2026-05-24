@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hellowork AutoApply</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 360px;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f7fbff 0%, #eef4fb 100%);
+      color: #1f2937;
+    }
+    .header {
+      padding: 14px 16px;
+      background: linear-gradient(120deg, #ff5f6d 0%, #ffc371 100%);
+      color: white;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .title { font-size: 15px; font-weight: 700; }
+    .v { font-size: 11px; opacity: 0.9; }
+    .block {
+      margin: 10px;
+      padding: 10px;
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    input, select, button {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid #d1d5db;
+      padding: 8px;
+      font-size: 12px;
+    }
+    button {
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-main { background: #ff6f61; color: white; }
+    .btn-stop { background: #b91c1c; color: white; }
+    .btn-muted { background: #e5e7eb; color: #111827; }
+    .status { font-size: 12px; padding: 8px; border-radius: 8px; background: #f3f4f6; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; }
+    .card { background: #f9fafb; border-radius: 8px; text-align: center; padding: 6px; }
+    .num { font-size: 18px; font-weight: 700; }
+    .lab { font-size: 10px; color: #6b7280; }
+    #log {
+      height: 150px;
+      overflow: auto;
+      background: #111827;
+      color: #d1fae5;
+      border-radius: 8px;
+      padding: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">Hellowork AutoApply</div>
+    <div class="v">v1.0.0</div>
+  </div>
+
+  <div class="block">
+    <div class="toggle">
+      <input type="checkbox" id="enabled" checked />
+      <label for="enabled">Extension activée</label>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <input id="keywords" placeholder="Ex: Controleur de gestion" />
+      <input id="location" placeholder="Ex: Paris" />
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <select id="contract">
+        <option value="">Type contrat (optionnel)</option>
+        <option value="CDI">CDI</option>
+        <option value="CDD">CDD</option>
+        <option value="Alternance">Alternance</option>
+        <option value="Stage">Stage</option>
+      </select>
+      <input id="maxJobs" type="number" min="1" max="100" value="25" />
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <button class="btn-main" id="startBtn">Demarrer session</button>
+      <button class="btn-stop" id="stopBtn">Arreter</button>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <button class="btn-muted" id="singleBtn">Postuler ici</button>
+      <button class="btn-muted" id="optionsBtn">Options</button>
+    </div>
+  </div>
+
+  <div class="block">
+    <div id="status" class="status">Etat: inactif</div>
+    <div class="stats">
+      <div class="card"><div id="applied" class="num">0</div><div class="lab">appliquees</div></div>
+      <div class="card"><div id="skipped" class="num">0</div><div class="lab">ignorees</div></div>
+      <div class="card"><div id="errors" class="num">0</div><div class="lab">erreurs</div></div>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="row" style="margin-bottom:8px;">
+      <button class="btn-muted" id="downloadLog">Download log</button>
+      <button class="btn-muted" id="clearLog">Clear log</button>
+      <button class="btn-muted" id="resetStats">Reset</button>
+    </div>
+    <div id="log">Chargement...</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
