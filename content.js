@@ -2,7 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  const VERSION = "1.0.1";
+  // v1.0.2 — Fix multiapply page click + fix next-job navigation after Hellowork redirect
+  const VERSION = "1.0.2";
   let isRunning = false;
   let shouldStop = false;
 
@@ -64,20 +65,18 @@
 
   async function endSession(reason) {
     await chrome.runtime.sendMessage({ action: "endSession" });
-    if (reason) {
-      log(`Session stoppée: ${reason}`, "warn");
-    }
+    if (reason) log("Session stoppée: " + reason, "warn");
   }
 
   function textOf(el) {
     return (el?.textContent || "").trim();
   }
 
+  // ── Collect all offer links on a search page ────────────────────────────
   function collectOfferLinks() {
     const anchors = Array.from(document.querySelectorAll('a[href*="/fr-fr/emplois/"]'));
     const links = [];
     const seen = new Set();
-
     for (const a of anchors) {
       const href = a.getAttribute("href");
       if (!href) continue;
@@ -85,59 +84,49 @@
       if (!isOfferPage(abs)) continue;
       if (seen.has(abs)) continue;
       seen.add(abs);
-
-      const title = textOf(a).substring(0, 180);
-      links.push({
-        url: abs,
-        jobId: offerIdFromUrl(abs),
-        title,
-      });
+      links.push({ url: abs, jobId: offerIdFromUrl(abs), title: textOf(a).substring(0, 180) });
     }
-
     return links;
   }
 
+  // ── Find next page URL on search results ───────────────────────────────
   function findNextPageUrl() {
-    const selectors = [
-      'a[rel="next"]',
-      'a[aria-label*="Suivant"]',
-      'a[aria-label*="Next"]',
-      'a[href*="page="]',
-    ];
-
-    for (const sel of selectors) {
-      const candidates = Array.from(document.querySelectorAll(sel));
-      for (const el of candidates) {
+    for (const sel of ['a[rel="next"]', 'a[aria-label*="Suivant"]', 'a[aria-label*="Next"]']) {
+      for (const el of Array.from(document.querySelectorAll(sel))) {
         if (el.offsetParent === null) continue;
-        const txt = textOf(el).toLowerCase();
         const href = el.getAttribute("href");
-        if (!href) continue;
-
-        if (sel === 'a[href*="page="]' && !(txt.includes("suivant") || txt.includes("next") || txt === ">")) {
-          continue;
-        }
-
-        return normalizeUrl(new URL(href, window.location.origin).toString());
+        if (href) return normalizeUrl(new URL(href, window.location.origin).toString());
       }
     }
-
+    // Numbered pagination: find page link after currently active one
+    const pageLinks = Array.from(document.querySelectorAll('a[href*="page="]'));
+    for (let i = 0; i < pageLinks.length; i++) {
+      const el = pageLinks[i];
+      if (el.offsetParent === null) continue;
+      const cls = (el.className || "") + (el.getAttribute("aria-current") || "");
+      if (/active|current|selected/i.test(cls)) {
+        const next = pageLinks[i + 1];
+        if (next?.getAttribute("href"))
+          return normalizeUrl(new URL(next.getAttribute("href"), window.location.origin).toString());
+      }
+    }
     return "";
   }
 
+  // ── Job info from offer page DOM ───────────────────────────────────────
   function getOfferInfoFromDom() {
     const title =
       textOf(document.querySelector("h1")) ||
       textOf(document.querySelector('[data-testid*="title"]')) ||
       "Offre Hellowork";
-
-    let company = textOf(document.querySelector('a[href*="/entreprises/"]'));
-    if (!company) {
-      company = textOf(document.querySelector('[class*="company"], [class*="Company"]'));
-    }
-
+    const company =
+      textOf(document.querySelector('a[href*="/entreprises/"]')) ||
+      textOf(document.querySelector('[class*="company"], [class*="Company"]')) ||
+      "";
     return { title, company };
   }
 
+  // ── Simulate a human-like click ────────────────────────────────────────
   async function humanClick(el) {
     if (!el) return false;
     el.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -147,239 +136,185 @@
     return true;
   }
 
+  // ── Find best apply button (scored; can exclude one element) ───────────
   function findApplyButton(opts = {}) {
     const { exclude = null } = opts;
-    const clickables = Array.from(document.querySelectorAll("button, a"));
     const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "postuler maintenant"];
-    const blocked = ["alerte", "connexion", "se connecter", "inscrire", "compte"];
-
+    const blocked = ["alerte", "connexion", "se connecter", "inscrire", "compte", "sauvegarder"];
     let best = null;
     let bestScore = -1;
 
-    for (const el of clickables) {
+    for (const el of Array.from(document.querySelectorAll("button, a"))) {
       if (exclude && el === exclude) continue;
       if (el.offsetParent === null) continue;
       if (el.disabled) continue;
       const text = textOf(el).toLowerCase();
       if (!text) continue;
+      if (!wanted.some((w) => text.includes(w))) continue;
+      if (blocked.some((b) => text.includes(b))) continue;
 
-      if (wanted.some((w) => text.includes(w)) && !blocked.some((b) => text.includes(b))) {
-        let score = 1;
-        if (text.includes("je postule")) score += 6;
-        if (text.includes("postuler maintenant")) score += 4;
-        if (text.includes("envoyer ma candidature")) score += 5;
-        if (el.tagName === "BUTTON") score += 2;
-        if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
-        if (el.closest("#postuler")) score += 4;
-        if (score > bestScore) {
-          bestScore = score;
-          best = el;
-        }
-      }
+      let score = 1;
+      if (text === "je postule") score += 12;
+      if (text.includes("je postule")) score += 8;
+      if (text.includes("postuler maintenant")) score += 6;
+      if (text.includes("envoyer ma candidature")) score += 6;
+      if (el.tagName === "BUTTON") score += 3;
+      if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
+      if (el.closest("#postuler, [id*='postuler'], [class*='apply'], [class*='Apply']")) score += 5;
+      if (score > bestScore) { bestScore = score; best = el; }
     }
-
     return best;
   }
 
-  async function tryApplyClickChain() {
-    const firstButton = findApplyButton();
-    if (!firstButton) return { ok: false, reason: "no_apply_button" };
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  PAGE HANDLERS — one dedicated function per Hellowork page type
+  //
+  //  Flow:  search → offer → /bounce/multiapply → /bounce/createalert → search
+  //
+  //  Each handler either:
+  //    a) Lets the page navigate naturally (script dies, next handler picks up)
+  //    b) Explicitly sets window.location.href when we need to steer
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    const firstLabel = textOf(firstButton).slice(0, 100);
-    log(`1er clic postuler: ${firstLabel || "bouton sans libellé"}`);
-    await humanClick(firstButton);
-
-    // Short probe: many pages redirect quickly when first click is enough.
-    const probe = await waitForApplyOutcome(6000);
-    if (probe.outcome === "applied" || probe.outcome === "applied_or_followup" || probe.outcome === "error") {
-      return { ok: true, probe };
-    }
-
-    // If still on the offer page after first click, try a second apply button.
-    if (isOfferPage(window.location.href)) {
-      await sleep(jitter(500, 1200));
-      const secondButton = findApplyButton({ exclude: firstButton });
-      if (secondButton) {
-        const secondLabel = textOf(secondButton).slice(0, 100);
-        log(`2e clic postuler: ${secondLabel || "bouton sans libellé"}`);
-        await humanClick(secondButton);
-        const probe2 = await waitForApplyOutcome(12000);
-        return { ok: true, probe: probe2 };
-      }
-      log("Aucun 2e bouton postuler détecté après 1er clic", "warn");
-    }
-
-    return { ok: true, probe };
-  }
-
-  async function waitForApplyOutcome(timeoutMs = 25000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const url = window.location.href;
-      if (isMultiApplyPage(url)) {
-        return { outcome: "applied", url };
-      }
-      if (isCreateAlertPage(url)) {
-        return { outcome: "applied_or_followup", url };
-      }
-
-      const errNode = document.querySelector('[role="alert"], [class*="error"], [class*="Error"]');
-      const errText = textOf(errNode).toLowerCase();
-      if (errText.includes("erreur") || errText.includes("error")) {
-        return { outcome: "error", error: errText.substring(0, 200) };
-      }
-
-      await sleep(500);
-    }
-
-    return { outcome: "timeout" };
-  }
-
-  async function applyOnOfferPage(session, settings) {
-    const { title, company } = getOfferInfoFromDom();
-    const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(session.currentOfferUrl || "");
-
-    const clickChain = await tryApplyClickChain();
-    if (!clickChain.ok && clickChain.reason === "no_apply_button") {
-      await chrome.runtime.sendMessage({
-        action: "markSkipped",
-        jobId,
-        title,
-        url: window.location.href,
-        reason: "Bouton postuler introuvable",
-      });
-      log(`Offre ignorée (pas de bouton): ${title}`, "warn");
-      return { applied: false, reason: "no_apply_button" };
-    }
-
-    if (settings.autoSubmit === false) {
-      log(`Mode manuel: bouton trouvé sur ${title}`, "warn");
-      return { applied: false, reason: "manual_mode" };
-    }
-
-    let outcome = clickChain.probe || { outcome: "timeout" };
-    if (outcome.outcome === "timeout") {
-      // Final long wait in case redirect is slower on some offers.
-      outcome = await waitForApplyOutcome(18000);
-    }
-
-    if (outcome.outcome === "applied" || outcome.outcome === "applied_or_followup") {
-      await chrome.runtime.sendMessage({
-        action: "markApplied",
-        jobId,
-        title,
-        company,
-        url: window.location.href,
-      });
-      log(`Candidature envoyée: ${title}`, "success");
-      return { applied: true };
-    }
-
-    if (outcome.outcome === "error") {
-      await chrome.runtime.sendMessage({
-        action: "markError",
-        title,
-        error: outcome.error || "Erreur après clic postuler",
-      });
-      return { applied: false, reason: "apply_error" };
-    }
-
-    await chrome.runtime.sendMessage({
-      action: "markSkipped",
-      jobId,
-      title,
-      url: window.location.href,
-      reason: "Timeout après clic postuler",
-    });
-    return { applied: false, reason: "timeout" };
-  }
-
+  // SEARCH PAGE: pick next unvisited offer from the queue
   async function handleSearchPage(session, settings) {
-    if (!session.searchUrl) {
-      session = await setSession({ searchUrl: normalizeUrl(window.location.href) });
-    }
-
     const currentSearch = normalizeUrl(window.location.href);
-    if (session.searchUrl !== currentSearch) {
-      session = await setSession({
-        searchUrl: currentSearch,
-        queue: [],
-        queueIndex: 0,
-      });
+
+    // After applying, Hellowork redirects to a DIFFERENT search (related jobs).
+    // If the current URL doesn't match our session search, go back to ours.
+    if (session.searchUrl && session.searchUrl !== currentSearch) {
+      log("Page de recherche inattendue (redirect Hellowork) — retour session: " + session.searchUrl);
+      window.location.href = session.searchUrl;
+      return;
     }
 
-    const allLinks = collectOfferLinks();
+    if (!session.searchUrl) {
+      session = await setSession({ searchUrl: currentSearch });
+    }
+
     const visitedOffers = session.visitedOffers || {};
+    const allLinks = collectOfferLinks();
     const queue = allLinks.filter((item) => !visitedOffers[item.jobId || item.url]);
 
+    log("Page recherche: " + allLinks.length + " offres, " + queue.length + " non visitées");
+
     if (queue.length === 0) {
-      const noApplyPages = (session.noApplyPages || 0) + 1;
-      const updates = { noApplyPages };
-      session = await setSession(updates);
-      log(`Aucune nouvelle offre sur cette page (${noApplyPages})`, "warn");
-
-      const maxNoApply = settings.maxConsecutiveNoApplyPages || 1;
-      if (noApplyPages >= maxNoApply) {
-        await endSession(`Arrêt sécurité: ${noApplyPages} page(s) sans candidature`);
-        return;
-      }
-
       const nextUrl = findNextPageUrl();
-      if (!nextUrl) {
-        await endSession("Fin: plus de page suivante");
-        return;
-      }
-
       const seenSearch = session.visitedSearchUrls || [];
-      if (seenSearch.includes(nextUrl)) {
-        await endSession("Arrêt sécurité: page suivante déjà visitée");
+      if (!nextUrl || seenSearch.includes(nextUrl)) {
+        await endSession("Fin: plus de nouvelles offres à visiter");
         return;
       }
-
       await setSession({
         currentPage: (session.currentPage || 0) + 1,
-        searchUrl: nextUrl,
         visitedSearchUrls: [...seenSearch, nextUrl],
+        // Keep searchUrl pointing to the ORIGINAL search so redirect-guard still works
       });
-      log(`Navigation page suivante: ${nextUrl}`);
+      log("Page suivante: " + nextUrl);
       window.location.href = nextUrl;
       return;
     }
 
     const target = queue[0];
     const key = target.jobId || target.url;
-    const nextVisited = { ...(session.visitedOffers || {}), [key]: true };
-
     await setSession({
       phase: "offer",
       currentOfferUrl: target.url,
-      visitedOffers: nextVisited,
-      noApplyPages: 0,
+      currentJobTitle: target.title || "",
+      currentJobCompany: "",
+      visitedOffers: { ...visitedOffers, [key]: true },
     });
 
-    log(`Ouverture offre: ${target.title || target.url}`);
+    log("Ouverture offre: " + (target.title || target.url));
     await sleep(jitter(600, 1400));
     window.location.href = target.url;
   }
 
-  async function handleOfferLikePage(session, settings) {
-    let result = { applied: false, reason: "unknown" };
+  // OFFER PAGE: click 1st apply button, then 2nd if still on page
+  // Hellowork then navigates to /bounce/multiapply — we let it happen.
+  async function handleOfferPage(session, settings) {
+    const { title, company } = getOfferInfoFromDom();
+    const jobId = offerIdFromUrl(window.location.href);
 
-    if (isOfferPage(window.location.href)) {
-      result = await applyOnOfferPage(session, settings);
-    } else if (isMultiApplyPage(window.location.href) || isCreateAlertPage(window.location.href)) {
-      // Some flows land directly on bounce pages after automatic click/navigation.
-      const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(session.currentOfferUrl || "");
-      await chrome.runtime.sendMessage({
-        action: "markApplied",
-        jobId,
-        title: `Offre ${jobId || "Hellowork"}`,
-        company: "",
-        url: window.location.href,
-      });
-      result = { applied: true };
-      log("Succès détecté via page bounce/multiapply", "success");
+    // Save job info so createalert handler can mark it applied correctly
+    await setSession({ currentJobTitle: title, currentJobCompany: company, currentOfferUrl: window.location.href });
+    log("Offre: " + title + " @ " + company);
+
+    const firstBtn = findApplyButton();
+    if (!firstBtn) {
+      log("Ignorée (pas de bouton postuler): " + title, "warn");
+      await chrome.runtime.sendMessage({ action: "markSkipped", jobId, title, url: window.location.href, reason: "Bouton postuler introuvable" });
+      const refreshed = await getSession();
+      if (refreshed?.searchUrl) {
+        await setSession({ phase: "search" });
+        await sleep(jitter(2000, 4000));
+        window.location.href = refreshed.searchUrl;
+      }
+      return;
     }
+
+    log("1er clic postuler: \"" + textOf(firstBtn).slice(0, 80) + "\"");
+    await humanClick(firstBtn);
+
+    // Short wait: if still on offer page, there is a 2nd confirmation button to click
+    await sleep(jitter(1500, 2500));
+    if (isOfferPage(window.location.href)) {
+      const secondBtn = findApplyButton({ exclude: firstBtn });
+      if (secondBtn) {
+        log("2e clic postuler: \"" + textOf(secondBtn).slice(0, 80) + "\"");
+        await humanClick(secondBtn);
+      }
+    }
+    // Page navigates to multiapply → script dies → handleMultiApplyPage continues
+  }
+
+  // MULTIAPPLY PAGE: click the "Je postule" / "Postuler" button
+  // Hellowork then navigates to /bounce/createalert — we let it happen.
+  async function handleMultiApplyPage(session, settings) {
+    log("Page multiapply — recherche bouton postuler...");
+    await sleep(jitter(700, 1300)); // Let page fully render before scanning DOM
+
+    const btn = findApplyButton();
+    if (btn) {
+      log("Clic multiapply: \"" + textOf(btn).slice(0, 80) + "\"");
+      await humanClick(btn);
+      // Page navigates to createalert → script dies → handleCreateAlertPage continues
+      return;
+    }
+
+    // No button found — wait for auto-redirect, then go back to search
+    log("Aucun bouton sur multiapply — attente redirection (4s)", "warn");
+    await sleep(4000);
+
+    if (isMultiApplyPage(window.location.href)) {
+      // Still here: count as applied and go back to search
+      const refreshed = await getSession();
+      const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(refreshed?.currentOfferUrl || "");
+      await chrome.runtime.sendMessage({
+        action: "markApplied", jobId,
+        title: refreshed?.currentJobTitle || ("Offre " + (jobId || "Hellowork")),
+        company: refreshed?.currentJobCompany || "",
+        url: refreshed?.currentOfferUrl || window.location.href,
+      });
+      if (refreshed?.searchUrl) {
+        await setSession({ phase: "search", currentOfferUrl: "" });
+        window.location.href = refreshed.searchUrl;
+      }
+    }
+    // Otherwise, page already redirected — next handler will pick up
+  }
+
+  // CREATEALERT PAGE: final success — mark applied and go back to session search
+  async function handleCreateAlertPage(session, settings) {
+    const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(session.currentOfferUrl || "");
+    const title = session.currentJobTitle || ("Offre " + (jobId || "Hellowork"));
+    const company = session.currentJobCompany || "";
+
+    log("Candidature confirmée: " + title, "success");
+    await chrome.runtime.sendMessage({
+      action: "markApplied", jobId, title, company,
+      url: session.currentOfferUrl || window.location.href,
+    });
 
     const refreshed = await getSession();
     if (!refreshed?.active) return;
@@ -389,71 +324,63 @@
       return;
     }
 
-    const backUrl = refreshed.searchUrl || "https://www.hellowork.com/fr-fr/emploi/recherche.html";
+    const backUrl = refreshed.searchUrl;
+    if (!backUrl) { await endSession("Pas d'URL de recherche en session"); return; }
+
     await setSession({ phase: "search", currentOfferUrl: "" });
 
-    const minDelay = settings.delayBetweenJobs?.min ?? 6000;
-    const maxDelay = settings.delayBetweenJobs?.max ?? 12000;
-    await sleep(jitter(minDelay, maxDelay));
+    const delay = Math.max(settings.delayBetweenJobs?.min ?? 3000, 2000);
+    await sleep(delay);
 
-    log(`Retour à la recherche (${result.applied ? "appliquée" : result.reason})`);
+    log("Retour recherche pour prochaine offre: " + backUrl);
     window.location.href = backUrl;
   }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  //  MAIN SESSION RUNNER — dispatches to per-page handler
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   async function runAutoApplySession() {
     if (isRunning) return;
     isRunning = true;
-
     try {
       const { autoApplySettings = {} } = await chrome.storage.local.get(["autoApplySettings"]);
       const settings = {
-        maxConsecutiveNoApplyPages: 1,
         autoSubmit: true,
-        delayBetweenJobs: { min: 6000, max: 14000 },
+        delayBetweenJobs: { min: 4000, max: 10000 },
         ...autoApplySettings,
       };
 
       const session = await getSession();
-      if (!session?.active) {
-        isRunning = false;
-        return;
-      }
-
-      if (shouldStop) {
-        await endSession("Arrêt demandé");
-        isRunning = false;
-        return;
-      }
-
+      if (!session?.active) { isRunning = false; return; }
+      if (shouldStop) { await endSession("Arrêt demandé"); isRunning = false; return; }
       if ((session.applied || 0) >= (session.maxJobs || 25)) {
-        await endSession("Objectif session atteint");
-        isRunning = false;
-        return;
+        await endSession("Objectif session atteint"); isRunning = false; return;
       }
 
-      if (isSearchPage()) {
-        await handleSearchPage(session, settings);
-      } else if (isOfferPage() || isMultiApplyPage() || isCreateAlertPage()) {
-        await handleOfferLikePage(session, settings);
-      } else {
-        log("Page non gérée pour cette session", "warn");
-      }
+      const url = window.location.href;
+      log("[v" + VERSION + "] Page: " + new URL(url).pathname);
+
+      if (isSearchPage(url))           await handleSearchPage(session, settings);
+      else if (isOfferPage(url))       await handleOfferPage(session, settings);
+      else if (isMultiApplyPage(url))  await handleMultiApplyPage(session, settings);
+      else if (isCreateAlertPage(url)) await handleCreateAlertPage(session, settings);
+      else log("Page non gérée: " + new URL(url).pathname, "warn");
+
     } catch (err) {
-      log(`Erreur session: ${err.message}`, "error");
+      log("Erreur session: " + err.message, "error");
       await chrome.runtime.sendMessage({ action: "markError", error: err.message });
     } finally {
       isRunning = false;
     }
   }
 
+  // Single-job manual apply from popup
   async function applySingleJob() {
-    if (!isOfferPage()) {
-      log("Apply single: ouvrir une fiche offre Hellowork d'abord", "warn");
-      return;
-    }
-    const session = (await getSession()) || { active: true, currentOfferUrl: window.location.href, searchUrl: "" };
+    if (!isOfferPage()) { log("Ouvrir une fiche offre Hellowork d'abord", "warn"); return; }
+    const session = (await getSession()) || { active: true, currentOfferUrl: window.location.href, searchUrl: "", maxJobs: 1 };
     const { autoApplySettings = {} } = await chrome.storage.local.get(["autoApplySettings"]);
-    await applyOnOfferPage(session, { autoSubmit: true, ...autoApplySettings });
+    await handleOfferPage(session, { autoSubmit: true, ...autoApplySettings });
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -461,30 +388,13 @@
       runAutoApplySession().then(() => sendResponse({ ok: true }));
       return true;
     }
-
-    if (msg.action === "stopAutoApply") {
-      shouldStop = true;
-      sendResponse({ ok: true });
-      return;
-    }
-
-    if (msg.action === "applySingleJob") {
-      applySingleJob().then(() => sendResponse({ ok: true }));
-      return true;
-    }
-
-    if (msg.action === "getContentStatus") {
-      sendResponse({ isRunning, shouldStop, url: window.location.href });
-      return;
-    }
+    if (msg.action === "stopAutoApply") { shouldStop = true; sendResponse({ ok: true }); return; }
+    if (msg.action === "applySingleJob") { applySingleJob().then(() => sendResponse({ ok: true })); return true; }
+    if (msg.action === "getContentStatus") { sendResponse({ isRunning, shouldStop, url: window.location.href }); return; }
   });
 
-  // Resume automatically after navigation when a session is active.
+  // Auto-resume when page loads during an active session
   setTimeout(() => {
-    getSession().then((session) => {
-      if (session?.active) {
-        runAutoApplySession();
-      }
-    });
+    getSession().then((session) => { if (session?.active) runAutoApplySession(); });
   }, 1000);
 })();
