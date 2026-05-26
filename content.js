@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.2 — Fix multiapply page click + fix next-job navigation after Hellowork redirect
-  const VERSION = "1.0.2";
+  // v1.0.3 — Skip recruiter-site offers + robust pagination on search pages
+  const VERSION = "1.0.3";
   let isRunning = false;
   let shouldStop = false;
 
@@ -40,6 +40,30 @@
 
   function isCreateAlertPage(url = window.location.href) {
     return /\/fr-fr\/bounce\/createalert/i.test(url);
+  }
+
+  function canonicalSearchContext(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      if (!isSearchPage(u.toString())) return "";
+      const params = [];
+      for (const [k, v] of u.searchParams.entries()) {
+        if (k === "p" || k === "page") continue;
+        if (k === "k_autocomplete" || k === "l_autocomplete") continue;
+        params.push([k, v]);
+      }
+      params.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+      const qs = params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+      return `${u.origin}${u.pathname}${qs ? "?" + qs : ""}`;
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function isSameSearchContext(a, b) {
+    const ca = canonicalSearchContext(a);
+    const cb = canonicalSearchContext(b);
+    return !!ca && ca === cb;
   }
 
   function offerIdFromUrl(url = window.location.href) {
@@ -90,7 +114,7 @@
   }
 
   // ── Find next page URL on search results ───────────────────────────────
-  function findNextPageUrl() {
+  function findNextPageUrl(currentSearchUrl) {
     for (const sel of ['a[rel="next"]', 'a[aria-label*="Suivant"]', 'a[aria-label*="Next"]']) {
       for (const el of Array.from(document.querySelectorAll(sel))) {
         if (el.offsetParent === null) continue;
@@ -99,7 +123,7 @@
       }
     }
     // Numbered pagination: find page link after currently active one
-    const pageLinks = Array.from(document.querySelectorAll('a[href*="page="]'));
+    const pageLinks = Array.from(document.querySelectorAll('a[href*="p="], a[href*="page="]'));
     for (let i = 0; i < pageLinks.length; i++) {
       const el = pageLinks[i];
       if (el.offsetParent === null) continue;
@@ -110,7 +134,18 @@
           return normalizeUrl(new URL(next.getAttribute("href"), window.location.origin).toString());
       }
     }
-    return "";
+    // URL fallback: increment p= (or page=) directly
+    try {
+      const u = new URL(currentSearchUrl, window.location.origin);
+      const hasP = u.searchParams.has("p");
+      const key = hasP ? "p" : "page";
+      const cur = parseInt(u.searchParams.get(key) || "1", 10);
+      const next = Number.isFinite(cur) && cur > 0 ? cur + 1 : 2;
+      u.searchParams.set(key, String(next));
+      return normalizeUrl(u.toString());
+    } catch (_err) {
+      return "";
+    }
   }
 
   // ── Job info from offer page DOM ───────────────────────────────────────
@@ -136,11 +171,35 @@
     return true;
   }
 
+  function findRecruiterSiteButton() {
+    const externalTexts = [
+      "postuler sur le site du recruteur",
+      "sur le site du recruteur",
+      "site du recruteur",
+    ];
+    for (const el of Array.from(document.querySelectorAll("button, a"))) {
+      if (el.offsetParent === null) continue;
+      const text = textOf(el).toLowerCase();
+      if (!text) continue;
+      if (externalTexts.some((t) => text.includes(t))) return el;
+    }
+    return null;
+  }
+
   // ── Find best apply button (scored; can exclude one element) ───────────
   function findApplyButton(opts = {}) {
     const { exclude = null } = opts;
     const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "postuler maintenant"];
-    const blocked = ["alerte", "connexion", "se connecter", "inscrire", "compte", "sauvegarder"];
+    const blocked = [
+      "alerte",
+      "connexion",
+      "se connecter",
+      "inscrire",
+      "compte",
+      "sauvegarder",
+      "site du recruteur",
+      "sur le site du recruteur",
+    ];
     let best = null;
     let bestScore = -1;
 
@@ -182,7 +241,7 @@
 
     // After applying, Hellowork redirects to a DIFFERENT search (related jobs).
     // If the current URL doesn't match our session search, go back to ours.
-    if (session.searchUrl && session.searchUrl !== currentSearch) {
+    if (session.searchUrl && !isSameSearchContext(session.searchUrl, currentSearch)) {
       log("Page de recherche inattendue (redirect Hellowork) — retour session: " + session.searchUrl);
       window.location.href = session.searchUrl;
       return;
@@ -193,13 +252,17 @@
     }
 
     const visitedOffers = session.visitedOffers || {};
+    const externalSiteOffers = session.externalSiteOffers || {};
     const allLinks = collectOfferLinks();
-    const queue = allLinks.filter((item) => !visitedOffers[item.jobId || item.url]);
+    const queue = allLinks.filter((item) => {
+      const key = item.jobId || item.url;
+      return !visitedOffers[key] && !externalSiteOffers[key];
+    });
 
     log("Page recherche: " + allLinks.length + " offres, " + queue.length + " non visitées");
 
     if (queue.length === 0) {
-      const nextUrl = findNextPageUrl();
+      const nextUrl = findNextPageUrl(currentSearch);
       const seenSearch = session.visitedSearchUrls || [];
       if (!nextUrl || seenSearch.includes(nextUrl)) {
         await endSession("Fin: plus de nouvelles offres à visiter");
@@ -235,10 +298,37 @@
   async function handleOfferPage(session, settings) {
     const { title, company } = getOfferInfoFromDom();
     const jobId = offerIdFromUrl(window.location.href);
+    const offerKey = jobId || normalizeUrl(window.location.href);
 
     // Save job info so createalert handler can mark it applied correctly
     await setSession({ currentJobTitle: title, currentJobCompany: company, currentOfferUrl: window.location.href });
     log("Offre: " + title + " @ " + company);
+
+    // External flow: "Postuler sur le site du recruteur" should be skipped to avoid leaving Hellowork.
+    const recruiterBtn = findRecruiterSiteButton();
+    if (recruiterBtn) {
+      const refreshedBeforeSkip = await getSession();
+      const externalSiteOffers = refreshedBeforeSkip?.externalSiteOffers || {};
+      await setSession({
+        phase: "search",
+        currentOfferUrl: "",
+        externalSiteOffers: { ...externalSiteOffers, [offerKey]: true },
+      });
+      await chrome.runtime.sendMessage({
+        action: "markSkipped",
+        jobId,
+        title,
+        url: window.location.href,
+        reason: "Postuler sur le site du recruteur",
+      });
+      log("Offre ignorée (site du recruteur): " + title, "warn");
+      const refreshed = await getSession();
+      if (refreshed?.searchUrl) {
+        await sleep(jitter(1200, 2200));
+        window.location.href = refreshed.searchUrl;
+      }
+      return;
+    }
 
     const firstBtn = findApplyButton();
     if (!firstBtn) {
