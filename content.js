@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.3 — Skip recruiter-site offers + robust pagination on search pages
-  const VERSION = "1.0.3";
+  // v1.0.4 — Multiapply submit button with scroll support
+  const VERSION = "1.0.4";
   let isRunning = false;
   let shouldStop = false;
 
@@ -186,10 +186,52 @@
     return null;
   }
 
+  function findMultiApplySubmitButton() {
+    const exactTexts = [
+      "envoyer mes candidatures",
+      "envoyer ma candidature",
+      "je postule",
+      "postuler",
+    ];
+    let best = null;
+    let bestScore = -1;
+    for (const el of Array.from(document.querySelectorAll("button, a"))) {
+      if (el.offsetParent === null) continue;
+      if (el.disabled) continue;
+      const text = textOf(el).toLowerCase();
+      if (!text) continue;
+      if (!exactTexts.some((t) => text.includes(t))) continue;
+
+      let score = 1;
+      if (text.includes("envoyer mes candidatures")) score += 20;
+      if (text.includes("envoyer ma candidature")) score += 14;
+      if (el.tagName === "BUTTON") score += 4;
+      if ((el.getAttribute("type") || "").toLowerCase() === "submit") score += 5;
+      if ((el.getAttribute("data-action") || "").toLowerCase().includes("multi-apply")) score += 10;
+      if (el.className && /btn-primary-candidacy/i.test(el.className)) score += 4;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    return best;
+  }
+
+  async function findMultiApplyButtonWithScroll() {
+    for (let i = 0; i < 6; i++) {
+      const btn = findMultiApplySubmitButton() || findApplyButton();
+      if (btn) return btn;
+      window.scrollBy({ top: 700, left: 0, behavior: "smooth" });
+      await sleep(jitter(450, 900));
+    }
+    return findMultiApplySubmitButton() || findApplyButton();
+  }
+
   // ── Find best apply button (scored; can exclude one element) ───────────
   function findApplyButton(opts = {}) {
     const { exclude = null } = opts;
-    const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "postuler maintenant"];
+    const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "envoyer mes candidatures", "postuler maintenant"];
     const blocked = [
       "alerte",
       "connexion",
@@ -364,7 +406,7 @@
     log("Page multiapply — recherche bouton postuler...");
     await sleep(jitter(700, 1300)); // Let page fully render before scanning DOM
 
-    const btn = findApplyButton();
+    const btn = await findMultiApplyButtonWithScroll();
     if (btn) {
       log("Clic multiapply: \"" + textOf(btn).slice(0, 80) + "\"");
       await humanClick(btn);

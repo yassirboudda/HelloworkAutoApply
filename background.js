@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.3";
+const EXT_VERSION = "1.0.4";
 
 const DEFAULT_PROFILE = {
   fullName: "",
