@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>Hellowork AutoApply - Options</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Segoe UI", Tahoma, sans-serif;
@@ -11,81 +12,80 @@
       color: #1f2937;
     }
     .wrap {
-      max-width: 900px;
+      max-width: 1000px;
       margin: 24px auto;
       padding: 0 16px;
     }
     .panel {
       background: white;
       border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 14px;
+      padding: 20px;
+      margin-bottom: 16px;
       box-shadow: 0 3px 12px rgba(0,0,0,0.08);
     }
-    h1 { margin: 0 0 14px; font-size: 22px; }
-    h2 { margin: 0 0 10px; font-size: 16px; }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 10px;
-    }
-    input, textarea {
-      width: 100%;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      padding: 9px;
-      font-size: 13px;
-    }
-    label {
-      font-size: 12px;
-      display: block;
-      margin-bottom: 4px;
-      color: #4b5563;
-    }
+    h1 { margin: 0 0 18px; font-size: 24px; }
+    h2 { margin: 0 0 14px; font-size: 16px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    input { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 13px; }
+    label { font-size: 12px; display: block; margin-bottom: 4px; font-weight: 600; }
     button {
       border: 0;
       background: #fb7185;
       color: white;
       border-radius: 10px;
-      padding: 10px 14px;
+      padding: 11px 18px;
       font-weight: 700;
       cursor: pointer;
+      font-size: 14px;
     }
-    #toast {
-      margin-left: 10px;
-      font-size: 13px;
-      color: #059669;
-    }
+    button:hover { background: #f43f5e; }
+    #toast { margin-left: 10px; font-size: 13px; color: #059669; font-weight: 600; }
+    p { font-size: 12px; color: #6b7280; margin-top: 8px; }
+    a { color: #fb7185; text-decoration: none; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Hellowork AutoApply - Options</h1>
+    <h1>⚙️ Hellowork AutoApply - Configuration</h1>
 
     <div class="panel">
-      <h2>Profil candidat</h2>
+      <h2>👤 Profil Candidat</h2>
       <div class="grid">
-        <div><label>Nom complet</label><input id="fullName" /></div>
-        <div><label>Email</label><input id="email" /></div>
-        <div><label>Telephone</label><input id="phone" /></div>
-        <div><label>Localisation</label><input id="location" /></div>
+        <div><label>Nom complet</label><input id="fullName" placeholder="Jean Dupont" /></div>
+        <div><label>Email</label><input id="email" type="email" placeholder="jean@example.com" /></div>
+        <div><label>Téléphone</label><input id="phone" placeholder="0612345678" /></div>
+        <div><label>Localisation</label><input id="location" placeholder="Paris" /></div>
+        <div><label>Titre professionnel</label><input id="title" placeholder="Ingénieur IA" /></div>
+        <div><label>Expérience</label><input id="experience" placeholder="5 ans développement Python" /></div>
+        <div><label>Compétences</label><input id="stack" placeholder="Python, TensorFlow, FastAPI" /></div>
+        <div><label>Langues</label><input id="languages" placeholder="Français (natif), Anglais (courant)" /></div>
+        <div><label>Disponibilité</label><input id="availability" placeholder="Disponible immédiatement" /></div>
+        <div><label>Prétention salariale</label><input id="salaryExpectation" placeholder="50k-60k EUR/an" /></div>
       </div>
     </div>
 
     <div class="panel">
-      <h2>Reglages automation</h2>
+      <h2>🤖 Mistral AI API Key (optionnel)</h2>
       <div class="grid">
-        <div><label>Max jobs/session</label><input id="maxJobsPerSession" type="number" min="1" max="100" /></div>
-        <div><label>Delai jobs min (ms)</label><input id="delayJobMin" type="number" min="1000" /></div>
-        <div><label>Delai jobs max (ms)</label><input id="delayJobMax" type="number" min="1000" /></div>
-        <div><label>Delai etapes min (ms)</label><input id="delayStepMin" type="number" min="100" /></div>
-        <div><label>Delai etapes max (ms)</label><input id="delayStepMax" type="number" min="100" /></div>
-        <div><label>Pages consecutives sans apply avant stop</label><input id="maxNoApplyPages" type="number" min="1" max="5" /></div>
+        <div><label>Clé API Mistral</label><input id="mistralApiKey" type="password" placeholder="Laissez vide pour utiliser clé gratuite" /></div>
+      </div>
+      <p>Obtenez une clé sur <a href="https://console.mistral.ai" target="_blank">console.mistral.ai</a>. Une clé gratuite est pré-configurée.</p>
+    </div>
+
+    <div class="panel">
+      <h2>⚙️ Réglages Automation</h2>
+      <div class="grid">
+        <div><label>Max offres/session</label><input id="maxJobsPerSession" type="number" min="1" max="100" /></div>
+        <div><label>Pages sans apply avant stop</label><input id="maxNoApplyPages" type="number" min="1" max="5" /></div>
+        <div><label>Délai entre offres MIN (ms)</label><input id="delayJobMin" type="number" min="1000" /></div>
+        <div><label>Délai entre offres MAX (ms)</label><input id="delayJobMax" type="number" min="1000" /></div>
+        <div><label>Délai entre étapes MIN (ms)</label><input id="delayStepMin" type="number" min="100" /></div>
+        <div><label>Délai entre étapes MAX (ms)</label><input id="delayStepMax" type="number" min="100" /></div>
       </div>
     </div>
 
     <div class="panel">
-      <button id="saveBtn">Sauvegarder</button>
+      <button id="saveBtn">✅ Sauvegarder Configuration</button>
       <span id="toast"></span>
     </div>
   </div>

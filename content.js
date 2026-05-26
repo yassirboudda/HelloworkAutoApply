@@ -218,6 +218,82 @@
     return best;
   }
 
+  // ── Form Field Detection and Auto-Filling ──────────────────────────────
+  async function getProfileFromBackground() {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: "getProfile" }, (profile) => {
+        resolve(profile || {});
+      });
+    });
+  }
+
+  function isPhoneField(label) {
+    return /tel|phone|téléphone|portable|mobile|numéro/i.test(label);
+  }
+
+  function isEmailField(label) {
+    return /email|mail|courriel/i.test(label);
+  }
+
+  function isNameField(label) {
+    return /nom|name|prénom|first|last/i.test(label);
+  }
+
+  function getFieldLabel(el) {
+    const label = el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.name || "";
+    const parent = el.closest(".field, .form-group, [class*='form'], [class*='input']");
+    const labelEl = parent?.querySelector("label, [class*='label']");
+    return (labelEl?.textContent || label || "").toLowerCase().trim();
+  }
+
+  function setFieldValue(el, value) {
+    el.focus();
+    el.value = value;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+  }
+
+  async function detectAndFillForm() {
+    const profile = await getProfileFromBackground();
+    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea, select"));
+    
+    let filled = 0;
+    for (const field of fields) {
+      if (field.disabled || field.offsetParent === null) continue;
+      if (field.value && field.value.trim().length > 0) continue;
+
+      const label = getFieldLabel(field);
+      let shouldFill = false;
+      let value = null;
+
+      if (isPhoneField(label) && profile.phone) {
+        value = profile.phone;
+        shouldFill = true;
+      }
+      else if (isEmailField(label) && profile.email) {
+        value = profile.email;
+        shouldFill = true;
+      }
+      else if (isNameField(label) && /prénom|first/.test(label) && profile.firstName) {
+        value = profile.firstName;
+        shouldFill = true;
+      }
+      else if (isNameField(label) && /nom|last/.test(label) && profile.lastName) {
+        value = profile.lastName;
+        shouldFill = true;
+      }
+
+      if (shouldFill && value) {
+        setFieldValue(field, value);
+        log(`✅ ${label} = ${value}`, "success");
+        filled++;
+        await sleep(jitter(400, 800));
+      }
+    }
+    return filled;
+  }
+
   async function findMultiApplyButtonWithScroll() {
     for (let i = 0; i < 6; i++) {
       const btn = findMultiApplySubmitButton() || findApplyButton();

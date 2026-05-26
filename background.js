@@ -1,10 +1,23 @@
-const EXT_VERSION = "1.0.4";
+const EXT_VERSION = "1.0.5";
+
+// ── Mistral AI Configuration ────────────────────────────────────────────────
+const MISTRAL_MODEL = "mistral-large-latest";
+const MISTRAL_ENDPOINT = "https://api.mistral.ai/v1/chat/completions";
+const DEFAULT_MISTRAL_API_KEY = "uwqtlWhrRDIdE0QAHYkIhMFkLTbkDYIb";
 
 const DEFAULT_PROFILE = {
   fullName: "",
+  firstName: "",
+  lastName: "",
   email: "",
   phone: "",
   location: "",
+  title: "",
+  experience: "",
+  stack: "",
+  languages: "",
+  availability: "",
+  salaryExpectation: "",
 };
 
 const DEFAULT_SETTINGS = {
@@ -16,6 +29,57 @@ const DEFAULT_SETTINGS = {
   maxConsecutiveNoApplyPages: 1,
 };
 
+// ── Mistral API Call ───────────────────────────────────────────────────────
+async function getMistralApiKey() {
+  const result = await chrome.storage.local.get(["mistralApiKey"]);
+  return result.mistralApiKey || DEFAULT_MISTRAL_API_KEY;
+}
+
+async function askMistral(systemPrompt, userPrompt, maxTokens = 300) {
+  const apiKey = await getMistralApiKey();
+  if (!apiKey) {
+    console.warn("[HelloworkAutoApply] No Mistral API key");
+    return null;
+  }
+  try {
+    const response = await fetch(MISTRAL_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + apiKey,
+      },
+      body: JSON.stringify({
+        model: MISTRAL_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.7,
+      }),
+    });
+    if (response.status === 429) {
+      console.warn("[HelloworkAutoApply] Mistral rate limit");
+      return null;
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("[HelloworkAutoApply] Mistral error:", response.status, text);
+      return null;
+    }
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || null;
+  } catch (err) {
+    console.error("[HelloworkAutoApply] Mistral fetch error:", err);
+    return null;
+  }
+}
+
+async function getProfileData() {
+  const result = await chrome.storage.local.get(["profile"]);
+  return result.profile || { ...DEFAULT_PROFILE };
+}
+
 async function getState() {
   const data = await chrome.storage.local.get([
     "enabled",
@@ -26,6 +90,7 @@ async function getState() {
     "autoApplySettings",
     "appliedJobs",
     "skippedJobs",
+    "mistralApiKey",
   ]);
 
   return {
@@ -37,6 +102,7 @@ async function getState() {
     autoApplySettings: data.autoApplySettings || { ...DEFAULT_SETTINGS },
     appliedJobs: data.appliedJobs || {},
     skippedJobs: data.skippedJobs || {},
+    mistralApiKey: data.mistralApiKey || DEFAULT_MISTRAL_API_KEY,
   };
 }
 
@@ -44,86 +110,18 @@ async function appendLog(message, level = "info") {
   const { log = [] } = await chrome.storage.local.get(["log"]);
   const ts = new Date().toLocaleTimeString("fr-FR", { hour12: false });
   const icon = level === "error" ? "❌" : level === "warn" ? "⚠️" : level === "success" ? "✅" : "ℹ️";
-  log.push(`[${ts}] ${icon} ${message}`);
+  log.push("[${ts}] ${icon} ${message}");
   if (log.length > 800) log.splice(0, log.length - 800);
   await chrome.storage.local.set({ log });
-  console.log(`[HelloworkAutoApply] ${icon} ${message}`);
+  console.log("[HelloworkAutoApply] ${icon} ${message}");
 }
 
-async function triggerContent(tabId) {
-  try {
-    const status = await chrome.tabs.sendMessage(tabId, { action: "getContentStatus" });
-    if (status?.isRunning) {
-      return;
-    }
-  } catch (_err) {
-    // Content script may not be ready yet. Continue.
-  }
-
-  for (let i = 0; i < 3; i++) {
-    try {
-      await chrome.tabs.sendMessage(tabId, { action: "startAutoApply" });
-      return;
-    } catch (_err) {
-      if (i < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 1200));
-      }
-    }
-  }
-}
-
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab.url) return;
-  if (!tab.url.includes("hellowork.com/fr-fr/")) return;
-
-  const { enabled = true, session = null } = await chrome.storage.local.get(["enabled", "session"]);
-  if (!enabled || !session?.active) return;
-
-  await appendLog(`Page chargée: ${new URL(tab.url).pathname}`);
-
-  // Small delay to avoid race on SPA re-renders.
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-
-  const { session: latestSession = null } = await chrome.storage.local.get(["session"]);
-  if (!latestSession?.active) return;
-
-  await triggerContent(tabId);
-});
-
+// ── Message Handler ────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "getState") {
-    getState().then(sendResponse);
-    return true;
-  }
-
-  if (msg.action === "setEnabled") {
-    chrome.storage.local.set({ enabled: !!msg.enabled }).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (msg.action === "addLog") {
-    appendLog(msg.message || "", msg.level || "info").then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (msg.action === "clearLog") {
-    chrome.storage.local.set({ log: [] }).then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (msg.action === "clearApplied") {
-    chrome.storage.local
-      .set({
-        appliedJobs: {},
-        skippedJobs: {},
-        stats: { applied: 0, skipped: 0, errors: 0, lastRun: null },
-      })
-      .then(() => sendResponse({ ok: true }));
-    return true;
-  }
-
-  if (msg.action === "saveProfile") {
-    chrome.storage.local.set({ profile: msg.profile || { ...DEFAULT_PROFILE } }).then(() => sendResponse({ ok: true }));
+    (async () => {
+      sendResponse(await getState());
+    })();
     return true;
   }
 
@@ -131,27 +129,39 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const session = {
         active: true,
-        phase: "search",
-        keywords: msg.keywords || "",
-        location: msg.location || "",
-        contract: msg.contract || "",
-        currentPage: 0,
         searchUrl: msg.searchUrl || "",
-        queue: [],
-        queueIndex: 0,
         currentOfferUrl: "",
-        visitedOffers: {},
-        visitedSearchUrls: msg.searchUrl ? [msg.searchUrl] : [],
-        noApplyPages: 0,
+        currentJobTitle: "",
+        currentJobCompany: "",
+        phase: "search",
         applied: 0,
         skipped: 0,
         errors: 0,
+        visitedOffers: {},
+        externalSiteOffers: {},
+        visitedSearchUrls: [],
         maxJobs: msg.maxJobs || 25,
-        startedAt: new Date().toISOString(),
       };
-      await chrome.storage.local.set({ session });
-      await appendLog(`Session démarrée: ${session.keywords} (${session.location || "sans lieu"})`);
-      sendResponse({ ok: true, session });
+      await chrome.storage.local.set({ session, enabled: true });
+      await appendLog(`Session démarrée: ${msg.searchUrl}`, "success");
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.action === "endSession") {
+    (async () => {
+      const { session = null, stats = { applied: 0, skipped: 0, errors: 0, lastRun: null } } =
+        await chrome.storage.local.get(["session", "stats"]);
+      if (session?.active) {
+        stats.applied = (stats.applied || 0) + (session.applied || 0);
+        stats.skipped = (stats.skipped || 0) + (session.skipped || 0);
+        stats.errors = (stats.errors || 0) + (session.errors || 0);
+        stats.lastRun = new Date().toISOString();
+      }
+      await chrome.storage.local.set({ session: null, stats, enabled: false });
+      await appendLog(`Session terminée`, "info");
+      sendResponse({ ok: true });
     })();
     return true;
   }
@@ -159,27 +169,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.action === "updateSession") {
     (async () => {
       const { session = null } = await chrome.storage.local.get(["session"]);
-      if (!session) {
-        sendResponse({ ok: false });
-        return;
+      if (session) {
+        Object.assign(session, msg.updates || {});
+        await chrome.storage.local.set({ session });
       }
-      const updated = { ...session, ...(msg.updates || {}) };
-      await chrome.storage.local.set({ session: updated });
-      sendResponse({ ok: true, session: updated });
+      sendResponse({ ok: true });
     })();
     return true;
   }
 
-  if (msg.action === "endSession") {
+  if (msg.action === "getProfile") {
     (async () => {
-      const { session = null } = await chrome.storage.local.get(["session"]);
-      if (session) {
-        session.active = false;
-        session.endedAt = new Date().toISOString();
-        await chrome.storage.local.set({ session });
-      }
-      await appendLog("Session terminée", "success");
-      sendResponse({ ok: true });
+      const profile = await getProfileData();
+      sendResponse(profile);
+    })();
+    return true;
+  }
+
+  if (msg.action === "askMistral") {
+    (async () => {
+      const answer = await askMistral(msg.systemPrompt || "", msg.userPrompt || "", msg.maxTokens || 300);
+      sendResponse({ answer });
     })();
     return true;
   }
@@ -201,7 +211,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         session.applied = (session.applied || 0) + 1;
       }
       await chrome.storage.local.set({ appliedJobs, stats, session });
-      await appendLog(`Candidature envoyée: ${msg.title || msg.jobId || "offre"}`, "success");
+      await appendLog(`Candidature envoyée: ${msg.title || msg.jobId}`, "success");
       sendResponse({ ok: true });
     })();
     return true;
@@ -223,7 +233,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         session.skipped = (session.skipped || 0) + 1;
       }
       await chrome.storage.local.set({ skippedJobs, stats, session });
-      await appendLog(`Ignorée: ${msg.title || msg.jobId || "offre"} (${msg.reason || "raison inconnue"})`, "warn");
+      await appendLog(`Ignorée: ${msg.title} (${msg.reason})`, "warn");
       sendResponse({ ok: true });
     })();
     return true;
@@ -238,7 +248,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         session.errors = (session.errors || 0) + 1;
       }
       await chrome.storage.local.set({ stats, session });
-      await appendLog(`Erreur: ${msg.error || "inconnue"}`, "error");
+      await appendLog(`Erreur: ${msg.error}`, "error");
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.action === "addLog") {
+    (async () => {
+      await appendLog(msg.message, msg.level);
+      sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.action === "clearLog") {
+    (async () => {
+      await chrome.storage.local.set({ log: [] });
+      await appendLog("Debug log cleared", "info");
       sendResponse({ ok: true });
     })();
     return true;
@@ -266,16 +293,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   return false;
 });
 
+// ── Initialize on Install ──────────────────────────────────────────────────
 chrome.runtime.onInstalled.addListener(async () => {
-  const data = await chrome.storage.local.get(["autoApplySettings", "profile", "enabled"]);
-  if (!data.autoApplySettings) {
-    await chrome.storage.local.set({ autoApplySettings: { ...DEFAULT_SETTINGS } });
-  }
-  if (!data.profile) {
+  const existing = await chrome.storage.local.get(["profile", "autoApplySettings", "mistralApiKey", "enabled"]);
+  if (!existing.profile) {
     await chrome.storage.local.set({ profile: { ...DEFAULT_PROFILE } });
   }
-  if (typeof data.enabled !== "boolean") {
+  if (!existing.autoApplySettings) {
+    await chrome.storage.local.set({ autoApplySettings: { ...DEFAULT_SETTINGS } });
+  }
+  if (!existing.mistralApiKey) {
+    await chrome.storage.local.set({ mistralApiKey: DEFAULT_MISTRAL_API_KEY });
+  }
+  if (typeof existing.enabled !== "boolean") {
     await chrome.storage.local.set({ enabled: true });
   }
-  await appendLog(`Extension installée v${EXT_VERSION}`);
+  await appendLog(`Extension installée v${EXT_VERSION}`, "success");
 });
