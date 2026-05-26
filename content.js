@@ -16,6 +16,40 @@
     chrome.runtime.sendMessage({ action: "addLog", message, level }).catch(() => {});
   }
 
+  // ── Notification Sound (Web Audio API) ──────────────────────────────────
+  function playNotificationSound(type = "success") {
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const gainNode = audioCtx.createGain();
+      gainNode.connect(audioCtx.destination);
+      gainNode.gain.value = 0.4;
+
+      if (type === "error") {
+        // Double low beep for errors
+        [0, 350].forEach((delay) => {
+          const osc = audioCtx.createOscillator();
+          osc.connect(gainNode);
+          osc.type = "sine";
+          osc.frequency.value = 440;
+          osc.start(audioCtx.currentTime + delay / 1000);
+          osc.stop(audioCtx.currentTime + delay / 1000 + 0.2);
+        });
+        setTimeout(() => audioCtx.close(), 1500);
+      } else {
+        // Single beep for success / apply
+        const osc = audioCtx.createOscillator();
+        osc.connect(gainNode);
+        osc.type = "sine";
+        osc.frequency.value = 660;
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+        setTimeout(() => audioCtx.close(), 1000);
+      }
+    } catch (e) {
+      console.warn("[HelloworkAutoApply] Could not play sound:", e.message);
+    }
+  }
+
   function normalizeUrl(url) {
     try {
       const u = new URL(url, window.location.origin);
@@ -500,6 +534,7 @@
       // Still here: count as applied and go back to search
       const refreshed = await getSession();
       const jobId = offerIdFromUrl(window.location.href) || offerIdFromUrl(refreshed?.currentOfferUrl || "");
+      playNotificationSound("success");
       await chrome.runtime.sendMessage({
         action: "markApplied", jobId,
         title: refreshed?.currentJobTitle || ("Offre " + (jobId || "Hellowork")),
@@ -521,6 +556,7 @@
     const company = session.currentJobCompany || "";
 
     log("Candidature confirmée: " + title, "success");
+    playNotificationSound("success");
     await chrome.runtime.sendMessage({
       action: "markApplied", jobId, title, company,
       url: session.currentOfferUrl || window.location.href,
@@ -579,6 +615,7 @@
 
     } catch (err) {
       log("Erreur session: " + err.message, "error");
+      playNotificationSound("error");
       await chrome.runtime.sendMessage({ action: "markError", error: err.message });
     } finally {
       isRunning = false;

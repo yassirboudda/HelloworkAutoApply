@@ -110,10 +110,10 @@ async function appendLog(message, level = "info") {
   const { log = [] } = await chrome.storage.local.get(["log"]);
   const ts = new Date().toLocaleTimeString("fr-FR", { hour12: false });
   const icon = level === "error" ? "❌" : level === "warn" ? "⚠️" : level === "success" ? "✅" : "ℹ️";
-  log.push("[${ts}] ${icon} ${message}");
+  log.push(`[${ts}] ${icon} ${message}`);
   if (log.length > 800) log.splice(0, log.length - 800);
   await chrome.storage.local.set({ log });
-  console.log("[HelloworkAutoApply] ${icon} ${message}");
+  console.log(`[HelloworkAutoApply] ${icon} ${message}`);
 }
 
 // ── Message Handler ────────────────────────────────────────────────────────
