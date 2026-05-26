@@ -464,6 +464,7 @@
     log("1er clic postuler: \"" + textOf(firstBtn).slice(0, 80) + "\"");
     await humanClick(firstBtn);
 
+    await detectAndFillForm();
     // Short wait: if still on offer page, there is a 2nd confirmation button to click
     await sleep(jitter(1500, 2500));
     if (isOfferPage(window.location.href)) {
@@ -482,6 +483,7 @@
     log("Page multiapply — recherche bouton postuler...");
     await sleep(jitter(700, 1300)); // Let page fully render before scanning DOM
 
+    await detectAndFillForm();
     const btn = await findMultiApplyButtonWithScroll();
     if (btn) {
       log("Clic multiapply: \"" + textOf(btn).slice(0, 80) + "\"");
