@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.22";
+const EXT_VERSION = "1.0.23";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -90,6 +90,7 @@ async function getState() {
     "stats",
     "log",
     "session",
+    "lastSession",
     "profile",
     "autoApplySettings",
     "appliedJobs",
@@ -102,6 +103,7 @@ async function getState() {
     stats: data.stats || { applied: 0, skipped: 0, errors: 0, lastRun: null },
     log: data.log || [],
     session: data.session || null,
+    lastSession: data.lastSession || null,
     profile: data.profile || { ...DEFAULT_PROFILE },
     autoApplySettings: data.autoApplySettings || { ...DEFAULT_SETTINGS },
     appliedJobs: data.appliedJobs || {},
@@ -157,17 +159,74 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === "endSession") {
     (async () => {
-      const { session = null, stats = { applied: 0, skipped: 0, errors: 0, lastRun: null } } =
-        await chrome.storage.local.get(["session", "stats"]);
+      const {
+        session = null,
+        stats = { applied: 0, skipped: 0, errors: 0, lastRun: null },
+        lastSession = null,
+      } = await chrome.storage.local.get(["session", "stats", "lastSession"]);
+
+      let nextLastSession = lastSession;
       if (session?.active) {
         stats.applied = (stats.applied || 0) + (session.applied || 0);
         stats.skipped = (stats.skipped || 0) + (session.skipped || 0);
         stats.errors = (stats.errors || 0) + (session.errors || 0);
         stats.lastRun = new Date().toISOString();
+
+        nextLastSession = {
+          ...session,
+          active: false,
+          endedAt: new Date().toISOString(),
+        };
       }
-      await chrome.storage.local.set({ session: null, stats, enabled: false });
+
+      await chrome.storage.local.set({
+        session: null,
+        lastSession: nextLastSession,
+        stats,
+        enabled: false,
+      });
       await appendLog(`Session terminée`, "info");
       sendResponse({ ok: true });
+    })();
+    return true;
+  }
+
+  if (msg.action === "resumeLastSession") {
+    (async () => {
+      const { session = null, lastSession = null } = await chrome.storage.local.get(["session", "lastSession"]);
+
+      if (session?.active) {
+        sendResponse({ ok: false, reason: "session_already_active" });
+        return;
+      }
+
+      if (!lastSession || !lastSession.searchUrl) {
+        sendResponse({ ok: false, reason: "no_last_session" });
+        return;
+      }
+
+      const resumedSession = {
+        ...lastSession,
+        active: true,
+        phase: lastSession.phase || "search",
+        visitedOffers: lastSession.visitedOffers || {},
+        externalSiteOffers: lastSession.externalSiteOffers || {},
+        visitedSearchUrls: lastSession.visitedSearchUrls || [],
+        noNewOfferPages: lastSession.noNewOfferPages || 0,
+      };
+
+      const targetUrl =
+        resumedSession.phase === "offer" && resumedSession.currentOfferUrl
+          ? resumedSession.currentOfferUrl
+          : resumedSession.resumeSearchUrl || resumedSession.searchUrl;
+
+      await chrome.storage.local.set({
+        session: resumedSession,
+        enabled: true,
+      });
+
+      await appendLog(`Session reprise: ${targetUrl}`, "success");
+      sendResponse({ ok: true, targetUrl });
     })();
     return true;
   }

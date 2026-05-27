@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.22 — Robust salary amount filling for annual brut fields
-  const VERSION = "1.0.22";
+  // v1.0.23 — Resume-last-session workflow support
+  const VERSION = "1.0.23";
   let isRunning = false;
   let shouldStop = false;
 

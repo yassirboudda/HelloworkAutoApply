@@ -82,9 +82,11 @@ async function refresh() {
   $("maxJobs").value = state.autoApplySettings?.maxJobsPerSession || 25;
 
   const session = state.session;
+  const lastSession = state.lastSession;
   const statusEl = $("status");
   const stopBtn = $("stopBtn");
   const startBtn = $("startBtn");
+  const resumeBtn = $("resumeBtn");
 
   if (session?.active) {
     statusEl.textContent = `Etat: session active | page ${1 + (session.currentPage || 0)} | ${session.applied || 0}/${session.maxJobs || 25}`;
@@ -93,6 +95,8 @@ async function refresh() {
     stopBtn.textContent = "Arreter (actif)";
     startBtn.disabled = true;
     startBtn.textContent = "Session active";
+    resumeBtn.disabled = true;
+    resumeBtn.textContent = "Reprendre derniere session";
   } else {
     statusEl.textContent = "Etat: inactif";
     statusEl.style.background = "#f3f4f6";
@@ -100,6 +104,18 @@ async function refresh() {
     stopBtn.textContent = "Arrete";
     startBtn.disabled = false;
     startBtn.textContent = "Demarrer session";
+
+    const hasLastSession = !!(lastSession && lastSession.searchUrl);
+    resumeBtn.disabled = !hasLastSession;
+    if (hasLastSession) {
+      const fromOffer = lastSession.phase === "offer" && !!lastSession.currentOfferUrl;
+      const page = 1 + (lastSession.currentPage || 0);
+      resumeBtn.textContent = fromOffer
+        ? `Reprendre: derniere offre (page ${page})`
+        : `Reprendre: page ${page}`;
+    } else {
+      resumeBtn.textContent = "Reprendre derniere session";
+    }
   }
 
   const lines = state.log || [];
@@ -153,6 +169,26 @@ $("stopBtn").addEventListener("click", async () => {
   await sendToContent({ action: "stopAutoApply" });
   await sendToBackground({ action: "endSession" });
   await refresh();
+});
+
+$("resumeBtn").addEventListener("click", async () => {
+  const resumed = await sendToBackground({ action: "resumeLastSession" });
+  if (!resumed?.ok || !resumed.targetUrl) {
+    const reason = resumed?.reason === "no_last_session"
+      ? "Etat: aucune session precedente a reprendre"
+      : "Etat: reprise impossible pour le moment";
+    $("status").textContent = reason;
+    return;
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id) {
+    await chrome.tabs.update(tab.id, { url: resumed.targetUrl });
+  } else {
+    await chrome.tabs.create({ url: resumed.targetUrl });
+  }
+
+  window.close();
 });
 
 $("singleBtn").addEventListener("click", async () => {

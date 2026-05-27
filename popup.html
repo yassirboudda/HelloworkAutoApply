@@ -51,6 +51,7 @@
     .btn-stop { background: #b91c1c; color: white; }
     .btn-stop:disabled { background: #9ca3af; color: #f9fafb; }
     .btn-muted { background: #e5e7eb; color: #111827; }
+    .btn-resume { background: #0f766e; color: white; }
     .status { font-size: 12px; padding: 8px; border-radius: 8px; background: #f3f4f6; }
     .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; }
     .card { background: #f9fafb; border-radius: 8px; text-align: center; padding: 6px; }
@@ -73,7 +74,7 @@
 <body>
   <div class="header">
     <div class="title">Hellowork AutoApply</div>
-    <div class="v">v1.0.22</div>
+    <div class="v">v1.0.23</div>
   </div>
 
   <div class="block">
@@ -96,6 +97,10 @@
     <div class="row">
       <button class="btn-main" id="startBtn">Demarrer session</button>
       <button class="btn-stop" id="stopBtn" disabled>Arrete</button>
+    </div>
+    <div style="height:8px"></div>
+    <div class="row">
+      <button class="btn-resume" id="resumeBtn" disabled>Reprendre derniere session</button>
     </div>
     <div style="height:8px"></div>
     <div class="row">
