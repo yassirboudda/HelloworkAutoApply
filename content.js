@@ -3,7 +3,7 @@
   window.__HelloworkAutoApplyLoaded = true;
 
   // v1.0.4 — Multiapply submit button with scroll support
-  const VERSION = "1.0.6";
+  const VERSION = "1.0.7";
   let isRunning = false;
   let shouldStop = false;
 
@@ -288,9 +288,96 @@
     el.dispatchEvent(new Event("blur", { bubbles: true }));
   }
 
+  // ── Answer required <select> prescreening questions ─────────────────────
+  async function answerSelectFields() {
+    const profile = await getProfileFromBackground();
+    const selects = Array.from(document.querySelectorAll(
+      "select[required], select.select-error"
+    ));
+    let answered = 0;
+
+    for (const sel of selects) {
+      if (sel.disabled || sel.offsetParent === null) continue;
+      // Already answered — skip
+      if (sel.value && sel.value !== "") continue;
+
+      // Get label text: prefer label[for=id], then aria-label, then name
+      let labelText = "";
+      if (sel.id) {
+        const labelEl = document.querySelector(`label[for="${CSS.escape(sel.id)}"]`);
+        if (labelEl) labelText = labelEl.textContent.trim();
+      }
+      if (!labelText) labelText = sel.getAttribute("aria-label") || sel.name || "question";
+
+      // Collect non-empty, non-disabled options
+      const options = Array.from(sel.options).filter(
+        (o) => o.value !== "" && !o.disabled
+      );
+      if (options.length === 0) continue;
+
+      let chosenValue = null;
+
+      // Try Mistral AI
+      try {
+        const profileContext = JSON.stringify(profile);
+        const optionsList = options.map((o) => `"${(o.title || o.text).trim()}"`).join(", ");
+        const answer = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("timeout")), 6000);
+          chrome.runtime.sendMessage(
+            {
+              action: "askMistral",
+              systemPrompt: `Tu es un candidat qui postule à un emploi. Profil: ${profileContext}. Réponds à la question de présélection en choisissant EXACTEMENT une option parmi celles proposées. Réponds UNIQUEMENT avec le texte exact d'une option, sans explication.`,
+              userPrompt: `Question: "${labelText}"\nOptions disponibles: ${optionsList}\n\nRéponds avec le texte exact d'une option.`,
+              maxTokens: 10,
+            },
+            (resp) => {
+              clearTimeout(timer);
+              resolve(resp?.answer?.trim() || null);
+            }
+          );
+        });
+
+        if (answer) {
+          const ans = answer.toLowerCase();
+          const match = options.find((o) => {
+            const t = (o.title || o.text).trim().toLowerCase();
+            return t === ans || t.includes(ans) || ans.includes(t);
+          });
+          if (match) chosenValue = match.value;
+        }
+      } catch (_e) {
+        // AI unavailable or timed out — fall through to fallback
+      }
+
+      // Fallback: pick first available option
+      if (!chosenValue) {
+        chosenValue = options[0].value;
+        log(
+          `⚠️ IA indisponible pour "${labelText}" — réponse par défaut: "${(options[0].title || options[0].text).trim()}"`,
+          "warn"
+        );
+      }
+
+      sel.value = chosenValue;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      sel.dispatchEvent(new Event("input", { bubbles: true }));
+      sel.dispatchEvent(new Event("blur", { bubbles: true }));
+
+      const chosenOpt = options.find((o) => o.value === chosenValue);
+      log(
+        `✅ Présélection "${labelText}" → "${(chosenOpt?.title || chosenOpt?.text || chosenValue).trim()}"`,
+        "success"
+      );
+      answered++;
+      await sleep(jitter(300, 600));
+    }
+
+    return answered;
+  }
+
   async function detectAndFillForm() {
     const profile = await getProfileFromBackground();
-    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea, select"));
+    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea"));
     
     let filled = 0;
     for (const field of fields) {
@@ -327,6 +414,7 @@
     }
     return filled;
   }
+
 
   async function findMultiApplyButtonWithScroll() {
     for (let i = 0; i < 6; i++) {
@@ -513,21 +601,50 @@
     log("1er clic postuler: \"" + textOf(firstBtn).slice(0, 80) + "\"");
     await humanClick(firstBtn);
 
+
+    // Fill any forms visible after clicking the first button
+    await sleep(jitter(900, 1600));
     await detectAndFillForm();
+    await answerSelectFields();
 
     // Loop for multi-step forms (Hellowork shows "Continuer ma candidature" buttons)
     let prevBtn = firstBtn;
-    for (let step = 0; step < 6; step++) {
+    let prevBtnText = textOf(firstBtn).toLowerCase();
+    let stuckCount = 0;
+
+    for (let step = 0; step < 8; step++) {
       await sleep(jitter(1200, 2200));
       if (!isOfferPage(window.location.href)) break; // Page navigated away → done
+
+      // Fill ALL form fields (text + selects) BEFORE looking for the submit button
+      await detectAndFillForm();
+      const selectsFilled = await answerSelectFields();
+
+      // Extra wait if selects were just answered (let Stimulus controller validate)
+      if (selectsFilled > 0) await sleep(jitter(500, 900));
 
       const nextBtn = findApplyButton({ exclude: prevBtn });
       if (!nextBtn) break; // No more buttons on this page
 
+      const nextBtnText = textOf(nextBtn).toLowerCase();
+
+      // Stuck detection: same button after filling — abort to prevent infinite loop
+      if (nextBtnText === prevBtnText) {
+        stuckCount++;
+        if (stuckCount >= 2) {
+          log(`⚠️ Formulaire bloqué (même bouton "${nextBtnText}" après ${stuckCount} tentatives) — abandon`, "warn");
+          break;
+        }
+        log(`⚠️ Même bouton "${nextBtnText}" — nouvelle tentative de remplissage`, "warn");
+        await sleep(jitter(1500, 2500));
+        continue;
+      }
+
+      stuckCount = 0;
       log(`Étape ${step + 2} — clic: "${textOf(nextBtn).slice(0, 80)}"`);
       await humanClick(nextBtn);
-      await detectAndFillForm();
       prevBtn = nextBtn;
+      prevBtnText = nextBtnText;
     }
     // Page navigates to multiapply → script dies → handleMultiApplyPage continues
   }
