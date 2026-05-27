@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.19 — Sequential page traversal + civility profile support
-  const VERSION = "1.0.19";
+  // v1.0.20 — Pagination target hardening + loop guard on resume URL
+  const VERSION = "1.0.20";
   let isRunning = false;
   let shouldStop = false;
 
@@ -290,12 +290,24 @@
       for (const el of Array.from(document.querySelectorAll(sel))) {
         if (el.offsetParent === null) continue;
         const href = el.getAttribute("href");
-        if (href) return normalizeUrl(new URL(href, window.location.origin).toString());
+        if (!href) continue;
+        const candidate = normalizeUrl(new URL(href, window.location.origin).toString());
+        if (!isSearchPage(candidate)) continue;
+        if (!isSameSearchIntent(currentSearchUrl, candidate)) continue;
+        return candidate;
       }
     }
+
     // Numbered pagination: find page link after currently active one
     const pageLinks = Array.from(document.querySelectorAll('a[href*="p="], a[href*="page="]'))
-      .filter((el) => el.offsetParent !== null && !!el.getAttribute("href"));
+      .filter((el) => {
+        if (el.offsetParent === null) return false;
+        const href = el.getAttribute("href");
+        if (!href) return false;
+        const candidate = normalizeUrl(new URL(href, window.location.origin).toString());
+        if (!isSearchPage(candidate)) return false;
+        return isSameSearchIntent(currentSearchUrl, candidate);
+      });
 
     for (let i = 0; i < pageLinks.length; i++) {
       const el = pageLinks[i];
@@ -307,7 +319,10 @@
       if (/active|current|selected|is-active/i.test(cls)) {
         const next = pageLinks[i + 1];
         if (next?.getAttribute("href")) {
-          return normalizeUrl(new URL(next.getAttribute("href"), window.location.origin).toString());
+          const candidate = normalizeUrl(new URL(next.getAttribute("href"), window.location.origin).toString());
+          if (isSearchPage(candidate) && isSameSearchIntent(currentSearchUrl, candidate)) {
+            return candidate;
+          }
         }
       }
     }
@@ -1012,7 +1027,18 @@
       session = await setSession({ resumeSearchUrl: currentSearch });
     }
 
-    const preferredSearchUrl = session.resumeSearchUrl || session.searchUrl || currentSearch;
+    // Defensive guard: resume/search targets must always stay on search pages.
+    const safeSearchUrl = isSearchPage(session.searchUrl || "")
+      ? normalizeUrl(session.searchUrl)
+      : currentSearch;
+    const safeResumeUrl = isSearchPage(session.resumeSearchUrl || "")
+      ? normalizeUrl(session.resumeSearchUrl)
+      : safeSearchUrl;
+    if (safeSearchUrl !== (session.searchUrl || "") || safeResumeUrl !== (session.resumeSearchUrl || "")) {
+      session = await setSession({ searchUrl: safeSearchUrl, resumeSearchUrl: safeResumeUrl });
+    }
+
+    const preferredSearchUrl = safeResumeUrl || safeSearchUrl || currentSearch;
 
     // Hellowork may redirect to an unrelated search context. Keep session intent.
     if (preferredSearchUrl && !isSameSearchIntent(preferredSearchUrl, currentSearch)) {
@@ -1049,6 +1075,9 @@
       const noNewOfferPages = (session.noNewOfferPages || 0) + 1;
 
       let nextUrl = findNextPageUrl(currentSearch);
+      if (nextUrl && (!isSearchPage(nextUrl) || !isSameSearchIntent(currentSearch, nextUrl))) {
+        nextUrl = "";
+      }
       const seenSearch = Array.from(new Set((session.visitedSearchUrls || []).map((u) => searchPageKey(u))));
       let usedFallback = false;
 

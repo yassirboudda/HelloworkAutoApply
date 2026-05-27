@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.19";
+const EXT_VERSION = "1.0.20";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
