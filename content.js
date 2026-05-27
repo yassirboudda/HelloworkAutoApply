@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.9 — Better offer submit targeting and redirect outcome handling
-  const VERSION = "1.0.9";
+  // v1.0.10 — Safer pagination and empty-page stop logic
+  const VERSION = "1.0.10";
   let isRunning = false;
   let shouldStop = false;
 
@@ -229,25 +229,50 @@
       }
     }
     // Numbered pagination: find page link after currently active one
-    const pageLinks = Array.from(document.querySelectorAll('a[href*="p="], a[href*="page="]'));
+    const pageLinks = Array.from(document.querySelectorAll('a[href*="p="], a[href*="page="]'))
+      .filter((el) => el.offsetParent !== null && !!el.getAttribute("href"));
+
     for (let i = 0; i < pageLinks.length; i++) {
       const el = pageLinks[i];
-      if (el.offsetParent === null) continue;
-      const cls = (el.className || "") + (el.getAttribute("aria-current") || "");
-      if (/active|current|selected/i.test(cls)) {
+      const cls = [
+        el.className || "",
+        el.getAttribute("aria-current") || "",
+        el.parentElement?.className || "",
+      ].join(" ");
+      if (/active|current|selected|is-active/i.test(cls)) {
         const next = pageLinks[i + 1];
-        if (next?.getAttribute("href"))
+        if (next?.getAttribute("href")) {
           return normalizeUrl(new URL(next.getAttribute("href"), window.location.origin).toString());
+        }
       }
     }
-    // URL fallback: increment p= (or page=) directly
+
+    // Numeric fallback, but bounded by the highest page seen in pagination links.
     try {
       const u = new URL(currentSearchUrl, window.location.origin);
-      const hasP = u.searchParams.has("p");
-      const key = hasP ? "p" : "page";
-      const cur = parseInt(u.searchParams.get(key) || "1", 10);
-      const next = Number.isFinite(cur) && cur > 0 ? cur + 1 : 2;
-      u.searchParams.set(key, String(next));
+      const current = parseInt(u.searchParams.get("page") || u.searchParams.get("p") || "1", 10);
+
+      const pageNums = [];
+      let preferredKey = u.searchParams.has("p") ? "p" : "page";
+      for (const link of pageLinks) {
+        const href = link.getAttribute("href");
+        if (!href) continue;
+        const lu = new URL(href, window.location.origin);
+        const pRaw = lu.searchParams.get("page");
+        const pAlt = lu.searchParams.get("p");
+        const p = parseInt(pRaw || pAlt || "", 10);
+        if (Number.isFinite(p) && p > 0) pageNums.push(p);
+        if (!u.searchParams.has("page") && !u.searchParams.has("p")) {
+          if (pAlt) preferredKey = "p";
+          else if (pRaw) preferredKey = "page";
+        }
+      }
+
+      if (pageNums.length === 0) return "";
+      const maxPage = Math.max(...pageNums);
+      if (!Number.isFinite(current) || current < 1 || current >= maxPage) return "";
+
+      u.searchParams.set(preferredKey, String(current + 1));
       return normalizeUrl(u.toString());
     } catch (_err) {
       return "";
@@ -571,6 +596,7 @@
   // SEARCH PAGE: pick next unvisited offer from the queue
   async function handleSearchPage(session, settings) {
     const currentSearch = normalizeUrl(window.location.href);
+    const maxNoApplyPages = Math.max(parseInt(settings.maxConsecutiveNoApplyPages || 1, 10), 1);
 
     // Some Hellowork flows return directly to a search page after submit
     // (without passing through /bounce/createalert). Finalize the previous
@@ -637,6 +663,12 @@
     log(`Page recherche: ${allLinks.length} offres, ${queue.length} nouvelles (${alreadyDone} déjà traitées toutes sessions)`);
 
     if (queue.length === 0) {
+      const noNewOfferPages = (session.noNewOfferPages || 0) + 1;
+      if (noNewOfferPages > maxNoApplyPages) {
+        await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
+        return;
+      }
+
       const nextUrl = findNextPageUrl(currentSearch);
       const seenSearch = session.visitedSearchUrls || [];
       if (!nextUrl || seenSearch.includes(nextUrl)) {
@@ -645,10 +677,11 @@
       }
       await setSession({
         currentPage: (session.currentPage || 0) + 1,
+        noNewOfferPages,
         visitedSearchUrls: [...seenSearch, nextUrl],
         // Keep searchUrl pointing to the ORIGINAL search so redirect-guard still works
       });
-      log("Page suivante: " + nextUrl);
+      log(`Page suivante (${noNewOfferPages}/${maxNoApplyPages} sans nouvelles): ${nextUrl}`);
       window.location.href = nextUrl;
       return;
     }
@@ -661,6 +694,7 @@
       currentJobTitle: target.title || "",
       currentJobCompany: "",
       offerSubmitAttempted: false,
+      noNewOfferPages: 0,
       visitedOffers: { ...visitedOffers, [key]: true },
     });
 
