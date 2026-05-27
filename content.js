@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.17 — Safer pagination fallback + less aggressive no-new stop
-  const VERSION = "1.0.17";
+  // v1.0.18 — Cycle restart on pagination end + salary-field guard
+  const VERSION = "1.0.18";
   let isRunning = false;
   let shouldStop = false;
 
@@ -426,6 +426,10 @@
     return /date\s*de\s*naissance|naissance|birth\s*date|\bdob\b|mm\s*[\/-]\s*jj\s*[\/-]\s*aaaa|mm\s*[\/-]\s*dd\s*[\/-]\s*yyyy|dd\s*[\/-]\s*mm\s*[\/-]\s*yyyy/i.test(label);
   }
 
+  function isSalaryField(label) {
+    return /salaire|rémunération|remuneration|prétention|pretention|k\s*€|k\/?an|annuel|€\/an/i.test(label);
+  }
+
   function digitsOnly(value) {
     return String(value || "").replace(/\D+/g, "");
   }
@@ -500,6 +504,24 @@
 
   function getProfileBirthDate(profile) {
     return normalizeBirthDate(profile?.birthDate || "") || "01/01/2000";
+  }
+
+  function getProfileSalaryK(profile) {
+    const raw = String(profile?.salaryExpectation || "").trim().toLowerCase();
+    if (!raw) return "";
+
+    const nums = raw.match(/\d{2,6}/g) || [];
+    if (nums.length === 0) return "";
+
+    let n = parseInt(nums[0], 10);
+    if (!Number.isFinite(n) || n <= 0) return "";
+
+    // If value looks annual euros (e.g. 45000), convert to kEUR when needed.
+    if (n >= 1000) {
+      n = Math.round(n / 1000);
+    }
+
+    return String(n);
   }
 
   function formatBirthDateForField(field, value, fieldHint = "") {
@@ -692,6 +714,7 @@
     const cityValue = getProfileCity(profile) || inferCityFromSearchUrl(session?.searchUrl || "") || "Paris";
     const postalCodeValue = getProfilePostalCode(profile) || inferPostalCodeFromCity(cityValue) || "75000";
     const birthDateValue = getProfileBirthDate(profile);
+    const salaryValue = getProfileSalaryK(profile) || "35";
     const firstNameValue = getFallbackFirstName(profile);
     const lastNameValue = getFallbackLastName(profile);
     const phoneDigits = digitsOnly(profile.phone || "");
@@ -740,6 +763,10 @@
         value = postalCodeValue;
         shouldFill = true;
       }
+      else if (isSalaryField(fieldHint) && salaryValue) {
+        value = salaryValue;
+        shouldFill = true;
+      }
 
       // Generic fallback for required text fields when we still have no value.
       if (!shouldFill && field.required) {
@@ -750,21 +777,27 @@
           const wantsNumeric =
             field.inputMode === "numeric" ||
             /\[0-9\]|\\d|^[0-9+*?()[\]{}|.-]+$/.test(field.pattern || "") ||
-            /code postal|zip|postcode|téléphone|phone|mobile|portable|\bcp\b/.test(fieldHint);
+            /code postal|zip|postcode|téléphone|phone|mobile|portable|\bcp\b/.test(fieldHint) ||
+            isSalaryField(fieldHint);
 
           if (wantsNumeric) {
+            if (isSalaryField(fieldHint) && salaryValue) {
+              value = salaryValue;
+              shouldFill = true;
+            }
+
             const exactLen = field.maxLength > 0 ? field.maxLength : field.minLength;
-            if (exactLen === 5 && postalCodeValue) {
+            if (!shouldFill && exactLen === 5 && postalCodeValue) {
               value = postalCodeValue;
               shouldFill = true;
-            } else if (exactLen === 10 && phoneDigits) {
+            } else if (!shouldFill && exactLen === 10 && phoneDigits) {
               value = phoneDigits;
               shouldFill = true;
-            } else if (postalCodeValue) {
+            } else if (!shouldFill && postalCodeValue) {
               value = postalCodeValue;
               shouldFill = true;
             }
-          } else if (cityValue) {
+          } else if (cityValue && !isSalaryField(fieldHint)) {
             value = cityValue;
             shouldFill = true;
           }
@@ -780,7 +813,7 @@
         }
 
         // Respect common numeric constraints.
-        if (!isBirthField && (field.inputMode === "numeric" || /\[0-9\]|\\d/.test(field.pattern || ""))) {
+        if (!isBirthField && (field.inputMode === "numeric" || /\[0-9\]|\\d/.test(field.pattern || "") || isSalaryField(fieldHint))) {
           finalValue = digitsOnly(finalValue);
         }
 
@@ -967,7 +1000,20 @@
       }
 
       if (!nextUrl || seenSearch.includes(nextUrl)) {
-        await endSession("Fin: plus de nouvelles offres à visiter");
+        const restartUrl = session.searchUrl || currentSearch;
+        await setSession({
+          currentPage: 1,
+          noNewOfferPages,
+          visitedSearchUrls: [],
+          // Keep searchUrl unchanged so redirect-guard still works.
+        });
+        log(`Aucune page suivante détectée — nouveau cycle (${noNewOfferPages}/${maxNoApplyPages})`, "warn");
+
+        if (canonicalUrlWithoutHash(restartUrl) === canonicalUrlWithoutHash(currentSearch)) {
+          window.location.reload();
+        } else {
+          window.location.href = restartUrl;
+        }
         return;
       }
       await setSession({
