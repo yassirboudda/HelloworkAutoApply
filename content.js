@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.16 — Robust DOB format handling + better field/label detection
-  const VERSION = "1.0.16";
+  // v1.0.17 — Safer pagination fallback + less aggressive no-new stop
+  const VERSION = "1.0.17";
   let isRunning = false;
   let shouldStop = false;
 
@@ -302,10 +302,21 @@
   function buildFallbackNextPageUrl(currentSearchUrl) {
     try {
       const u = new URL(currentSearchUrl, window.location.origin);
-      const key = u.searchParams.has("p") ? "p" : "page";
-      const cur = parseInt(u.searchParams.get("page") || u.searchParams.get("p") || "1", 10);
+      const hasP = u.searchParams.has("p");
+      const hasPage = u.searchParams.has("page");
+      const cur = parseInt(u.searchParams.get("p") || u.searchParams.get("page") || "1", 10);
       if (!Number.isFinite(cur) || cur < 1 || cur >= 200) return "";
-      u.searchParams.set(key, String(cur + 1));
+
+      const next = String(cur + 1);
+      if (hasP && !hasPage) {
+        u.searchParams.set("p", next);
+      } else if (hasPage && !hasP) {
+        u.searchParams.set("page", next);
+      } else {
+        // Unknown pagination key on this search URL: set both.
+        u.searchParams.set("p", next);
+        u.searchParams.set("page", next);
+      }
       return normalizeUrl(u.toString());
     } catch (_err) {
       return "";
@@ -870,7 +881,8 @@
   // SEARCH PAGE: pick next unvisited offer from the queue
   async function handleSearchPage(session, settings) {
     const currentSearch = normalizeUrl(window.location.href);
-    const maxNoApplyPages = Math.max(parseInt(settings.maxConsecutiveNoApplyPages || 1, 10), 1);
+    const configuredNoApplyPages = parseInt(settings.maxConsecutiveNoApplyPages || 3, 10);
+    const maxNoApplyPages = Math.max(Number.isFinite(configuredNoApplyPages) ? configuredNoApplyPages : 3, 3);
 
     // Some Hellowork flows return directly to a search page after submit
     // (without passing through /bounce/createalert). Finalize the previous

@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.16";
+const EXT_VERSION = "1.0.17";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -29,7 +29,7 @@ const DEFAULT_SETTINGS = {
   delayBetweenSteps: { min: 700, max: 1600 },
   autoSubmit: true,
   onlyEasyApply: true,
-  maxConsecutiveNoApplyPages: 1,
+  maxConsecutiveNoApplyPages: 3,
 };
 
 // ── Mistral API Call ───────────────────────────────────────────────────────

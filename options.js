@@ -29,7 +29,7 @@ async function load() {
   $("delayJobMax").value = settings.delayBetweenJobs?.max || 14000;
   $("delayStepMin").value = settings.delayBetweenSteps?.min || 700;
   $("delayStepMax").value = settings.delayBetweenSteps?.max || 1600;
-  $("maxNoApplyPages").value = settings.maxConsecutiveNoApplyPages || 1;
+  $("maxNoApplyPages").value = settings.maxConsecutiveNoApplyPages || 3;
 }
 
 async function save() {
@@ -64,7 +64,7 @@ async function save() {
     },
     autoSubmit: true,
     onlyEasyApply: true,
-    maxConsecutiveNoApplyPages: parseInt($("maxNoApplyPages").value, 10) || 1,
+    maxConsecutiveNoApplyPages: Math.min(Math.max(parseInt($("maxNoApplyPages").value, 10) || 3, 1), 20),
   };
 
   await chrome.storage.local.set({ profile, autoApplySettings });
