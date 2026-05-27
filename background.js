@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.14";
+const EXT_VERSION = "1.0.15";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -13,6 +13,7 @@ const DEFAULT_PROFILE = {
   phone: "",
   location: "",
   postalCode: "",
+  birthDate: "",
   title: "",
   experience: "",
   stack: "",

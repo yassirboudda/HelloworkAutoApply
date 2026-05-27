@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.14 — Fallback next-page probe when pagination links are missing
-  const VERSION = "1.0.14";
+  // v1.0.15 — Birth date profile field + autofill fallback
+  const VERSION = "1.0.15";
   let isRunning = false;
   let shouldStop = false;
 
@@ -411,6 +411,10 @@
     return /code\s*postal|\bcp\b|postcode|zip|postal\s*code/i.test(label);
   }
 
+  function isBirthDateField(label) {
+    return /date\s*de\s*naissance|naissance|birth\s*date|\bdob\b/i.test(label);
+  }
+
   function digitsOnly(value) {
     return String(value || "").replace(/\D+/g, "");
   }
@@ -456,6 +460,35 @@
     const fromLocation = extractPostalCode(profile?.location || "");
     if (fromLocation) return fromLocation;
     return inferPostalCodeFromCity(getProfileCity(profile));
+  }
+
+  function normalizeBirthDate(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    let m = raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+    if (m) return `${m[1]}/${m[2]}/${m[3]}`;
+
+    m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+
+    const digits = raw.replace(/\D+/g, "");
+    if (/^\d{8}$/.test(digits)) {
+      return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+    }
+
+    return "";
+  }
+
+  function birthDateToIso(value) {
+    const normalized = normalizeBirthDate(value);
+    const m = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return "";
+    return `${m[3]}-${m[2]}-${m[1]}`;
+  }
+
+  function getProfileBirthDate(profile) {
+    return normalizeBirthDate(profile?.birthDate || "") || "01/01/2000";
   }
 
   function getFallbackFirstName(profile) {
@@ -594,9 +627,10 @@
   async function detectAndFillForm() {
     const profile = await getProfileFromBackground();
     const session = await getSession();
-    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea"));
+    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input[type='date'], input:not([type]), textarea"));
     const cityValue = getProfileCity(profile) || inferCityFromSearchUrl(session?.searchUrl || "") || "Paris";
     const postalCodeValue = getProfilePostalCode(profile) || inferPostalCodeFromCity(cityValue) || "75000";
+    const birthDateValue = getProfileBirthDate(profile);
     const firstNameValue = getFallbackFirstName(profile);
     const lastNameValue = getFallbackLastName(profile);
     const phoneDigits = digitsOnly(profile.phone || "");
@@ -613,10 +647,15 @@
         field.id || "",
         field.getAttribute("placeholder") || "",
       ].join(" ").toLowerCase();
+      const isBirthField = isBirthDateField(fieldHint);
       let shouldFill = false;
       let value = null;
 
-      if (isPhoneField(fieldHint) && phoneDigits) {
+      if (isBirthField && birthDateValue) {
+        value = birthDateValue;
+        shouldFill = true;
+      }
+      else if (isPhoneField(fieldHint) && phoneDigits) {
         value = phoneDigits;
         shouldFill = true;
       }
@@ -643,26 +682,31 @@
 
       // Generic fallback for required text fields when we still have no value.
       if (!shouldFill && field.required) {
-        const wantsNumeric =
-          field.inputMode === "numeric" ||
-          /\[0-9\]|\\d|^[0-9+*?()[\]{}|.-]+$/.test(field.pattern || "") ||
-          /code postal|zip|postcode|téléphone|phone|mobile|portable|\bcp\b/.test(fieldHint);
+        if (isBirthField && birthDateValue) {
+          value = birthDateValue;
+          shouldFill = true;
+        } else {
+          const wantsNumeric =
+            field.inputMode === "numeric" ||
+            /\[0-9\]|\\d|^[0-9+*?()[\]{}|.-]+$/.test(field.pattern || "") ||
+            /code postal|zip|postcode|téléphone|phone|mobile|portable|\bcp\b/.test(fieldHint);
 
-        if (wantsNumeric) {
-          const exactLen = field.maxLength > 0 ? field.maxLength : field.minLength;
-          if (exactLen === 5 && postalCodeValue) {
-            value = postalCodeValue;
-            shouldFill = true;
-          } else if (exactLen === 10 && phoneDigits) {
-            value = phoneDigits;
-            shouldFill = true;
-          } else if (postalCodeValue) {
-            value = postalCodeValue;
+          if (wantsNumeric) {
+            const exactLen = field.maxLength > 0 ? field.maxLength : field.minLength;
+            if (exactLen === 5 && postalCodeValue) {
+              value = postalCodeValue;
+              shouldFill = true;
+            } else if (exactLen === 10 && phoneDigits) {
+              value = phoneDigits;
+              shouldFill = true;
+            } else if (postalCodeValue) {
+              value = postalCodeValue;
+              shouldFill = true;
+            }
+          } else if (cityValue) {
+            value = cityValue;
             shouldFill = true;
           }
-        } else if (cityValue) {
-          value = cityValue;
-          shouldFill = true;
         }
       }
 
@@ -670,8 +714,12 @@
         let finalValue = String(value).trim();
         if (!finalValue) continue;
 
+        if (field.type === "date" && isBirthField) {
+          finalValue = birthDateToIso(finalValue) || "2000-01-01";
+        }
+
         // Respect common numeric constraints.
-        if (field.inputMode === "numeric" || /\[0-9\]|\\d/.test(field.pattern || "")) {
+        if (!isBirthField && (field.inputMode === "numeric" || /\[0-9\]|\\d/.test(field.pattern || ""))) {
           finalValue = digitsOnly(finalValue);
         }
 

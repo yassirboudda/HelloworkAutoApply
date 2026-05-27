@@ -11,6 +11,7 @@ async function load() {
   $("phone").value = profile.phone || "";
   $("location").value = profile.location || "";
   $("postalCode").value = profile.postalCode || "";
+  $("birthDate").value = profile.birthDate || "";
   $("title").value = profile.title || "";
   $("experience").value = profile.experience || "";
   $("stack").value = profile.stack || "";
@@ -40,6 +41,7 @@ async function save() {
     phone: $("phone").value.trim(),
     location: $("location").value.trim(),
     postalCode: $("postalCode").value.trim(),
+    birthDate: $("birthDate").value.trim(),
     title: $("title").value.trim(),
     experience: $("experience").value.trim(),
     stack: $("stack").value.trim(),
