@@ -1,5 +1,33 @@
 const $ = (id) => document.getElementById(id);
 
+function playBeep(type = "stop") {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const gainNode = audioCtx.createGain();
+    gainNode.connect(audioCtx.destination);
+    gainNode.gain.value = 0.4;
+    if (type === "error") {
+      [0, 350].forEach((delay) => {
+        const osc = audioCtx.createOscillator();
+        osc.connect(gainNode);
+        osc.type = "sine";
+        osc.frequency.value = 440;
+        osc.start(audioCtx.currentTime + delay / 1000);
+        osc.stop(audioCtx.currentTime + delay / 1000 + 0.2);
+      });
+      setTimeout(() => audioCtx.close(), 1500);
+    } else {
+      const osc = audioCtx.createOscillator();
+      osc.connect(gainNode);
+      osc.type = "sine";
+      osc.frequency.value = 660;
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.3);
+      setTimeout(() => audioCtx.close(), 1000);
+    }
+  } catch (e) { /* ignore */ }
+}
+
 async function sendToBackground(msg) {
   try {
     return await chrome.runtime.sendMessage(msg);
@@ -99,6 +127,7 @@ $("startBtn").addEventListener("click", async () => {
 });
 
 $("stopBtn").addEventListener("click", async () => {
+  playBeep("stop");
   await sendToContent({ action: "stopAutoApply" });
   await sendToBackground({ action: "endSession" });
   await refresh();

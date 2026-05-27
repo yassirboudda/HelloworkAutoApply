@@ -3,7 +3,7 @@
   window.__HelloworkAutoApplyLoaded = true;
 
   // v1.0.4 — Multiapply submit button with scroll support
-  const VERSION = "1.0.4";
+  const VERSION = "1.0.6";
   let isRunning = false;
   let shouldStop = false;
 
@@ -341,7 +341,11 @@
   // ── Find best apply button (scored; can exclude one element) ───────────
   function findApplyButton(opts = {}) {
     const { exclude = null } = opts;
-    const wanted = ["postuler", "je postule", "candidater", "envoyer ma candidature", "envoyer mes candidatures", "postuler maintenant"];
+    const wanted = [
+      "postuler", "je postule", "candidater",
+      "envoyer ma candidature", "envoyer mes candidatures", "postuler maintenant",
+      "continuer ma candidature", "continuer", "suivant", "valider", "confirmer",
+    ];
     const blocked = [
       "alerte",
       "connexion",
@@ -355,7 +359,7 @@
     let best = null;
     let bestScore = -1;
 
-    for (const el of Array.from(document.querySelectorAll("button, a"))) {
+    for (const el of Array.from(document.querySelectorAll("button, a, [type='submit']"))) {
       if (exclude && el === exclude) continue;
       if (el.offsetParent === null) continue;
       if (el.disabled) continue;
@@ -367,11 +371,15 @@
       let score = 1;
       if (text === "je postule") score += 12;
       if (text.includes("je postule")) score += 8;
-      if (text.includes("postuler maintenant")) score += 6;
-      if (text.includes("envoyer ma candidature")) score += 6;
+      if (text.includes("postuler maintenant")) score += 7;
+      if (text.includes("envoyer ma candidature")) score += 7;
+      if (text === "continuer ma candidature") score += 10;
+      if (text.includes("continuer ma candidature")) score += 8;
       if (el.tagName === "BUTTON") score += 3;
       if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
       if (el.closest("#postuler, [id*='postuler'], [class*='apply'], [class*='Apply']")) score += 5;
+      // Detect via data attribute (Hellowork form validator)
+      if (el.querySelector("[data-form-validator-target='text']")) score += 6;
       if (score > bestScore) { bestScore = score; best = el; }
     }
     return best;
@@ -403,15 +411,22 @@
       session = await setSession({ searchUrl: currentSearch });
     }
 
+    // Load persistent applied/skipped jobs from storage (across all sessions)
+    const stored = await chrome.storage.local.get(["appliedJobs", "skippedJobs"]);
+    const persistentApplied = stored.appliedJobs || {};
+    const persistentSkipped = stored.skippedJobs || {};
+
     const visitedOffers = session.visitedOffers || {};
     const externalSiteOffers = session.externalSiteOffers || {};
     const allLinks = collectOfferLinks();
     const queue = allLinks.filter((item) => {
       const key = item.jobId || item.url;
-      return !visitedOffers[key] && !externalSiteOffers[key];
+      // Skip: visited this session, external site this session, OR applied/skipped in any past session
+      return !visitedOffers[key] && !externalSiteOffers[key] && !persistentApplied[key] && !persistentSkipped[key];
     });
 
-    log("Page recherche: " + allLinks.length + " offres, " + queue.length + " non visitées");
+    const alreadyDone = Object.keys(persistentApplied).length + Object.keys(persistentSkipped).length;
+    log(`Page recherche: ${allLinks.length} offres, ${queue.length} nouvelles (${alreadyDone} déjà traitées toutes sessions)`);
 
     if (queue.length === 0) {
       const nextUrl = findNextPageUrl(currentSearch);
@@ -499,14 +514,20 @@
     await humanClick(firstBtn);
 
     await detectAndFillForm();
-    // Short wait: if still on offer page, there is a 2nd confirmation button to click
-    await sleep(jitter(1500, 2500));
-    if (isOfferPage(window.location.href)) {
-      const secondBtn = findApplyButton({ exclude: firstBtn });
-      if (secondBtn) {
-        log("2e clic postuler: \"" + textOf(secondBtn).slice(0, 80) + "\"");
-        await humanClick(secondBtn);
-      }
+
+    // Loop for multi-step forms (Hellowork shows "Continuer ma candidature" buttons)
+    let prevBtn = firstBtn;
+    for (let step = 0; step < 6; step++) {
+      await sleep(jitter(1200, 2200));
+      if (!isOfferPage(window.location.href)) break; // Page navigated away → done
+
+      const nextBtn = findApplyButton({ exclude: prevBtn });
+      if (!nextBtn) break; // No more buttons on this page
+
+      log(`Étape ${step + 2} — clic: "${textOf(nextBtn).slice(0, 80)}"`);
+      await humanClick(nextBtn);
+      await detectAndFillForm();
+      prevBtn = nextBtn;
     }
     // Page navigates to multiapply → script dies → handleMultiApplyPage continues
   }
