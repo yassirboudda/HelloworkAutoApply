@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.20 — Pagination target hardening + loop guard on resume URL
-  const VERSION = "1.0.20";
+  // v1.0.21 — Birth-date driven age-range select answers
+  const VERSION = "1.0.21";
   let isRunning = false;
   let shouldStop = false;
 
@@ -569,6 +569,95 @@
     return normalizeBirthDate(profile?.birthDate || "") || "01/01/2000";
   }
 
+  function normalizeText(value) {
+    return String(value || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+  }
+
+  function getProfileAge(profile) {
+    const normalized = normalizeBirthDate(profile?.birthDate || "");
+    const m = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return null;
+
+    const day = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10);
+    const year = parseInt(m[3], 10);
+    if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) return null;
+
+    const now = new Date();
+    let age = now.getFullYear() - year;
+    const passedBirthday =
+      now.getMonth() + 1 > month ||
+      (now.getMonth() + 1 === month && now.getDate() >= day);
+    if (!passedBirthday) age -= 1;
+
+    if (!Number.isFinite(age) || age < 0 || age > 120) return null;
+    return age;
+  }
+
+  function isAgeQuestion(label) {
+    const t = normalizeText(label);
+    return /\bage\b|tranche\s*d'?age|age\s*requis/.test(t);
+  }
+
+  function parseAgeRange(optionLabel) {
+    const t = normalizeText(optionLabel);
+    let m = t.match(/entre\s*(\d{1,2})\s*(?:et|-|a)\s*(\d{1,2})/);
+    if (m) return { min: parseInt(m[1], 10), max: parseInt(m[2], 10) };
+
+    m = t.match(/(\d{1,2})\s*[-–]\s*(\d{1,2})/);
+    if (m) return { min: parseInt(m[1], 10), max: parseInt(m[2], 10) };
+
+    m = t.match(/(?:plus\s*de|superieur\s*a|au[- ]?dessus\s*de)\s*(\d{1,2})/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return { min: n + 1, max: 200 };
+    }
+
+    m = t.match(/(?:moins\s*de|inferieur\s*a|au[- ]?dessous\s*de)\s*(\d{1,2})/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return { min: 0, max: Math.max(n - 1, 0) };
+    }
+
+    m = t.match(/(\d{1,2})\s*ans?\s*et\s*plus/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return { min: n, max: 200 };
+    }
+
+    m = t.match(/(\d{1,2})\s*\+/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      return { min: n, max: 200 };
+    }
+
+    if (/mineur/.test(t)) return { min: 0, max: 17 };
+    if (/majeur/.test(t)) return { min: 18, max: 200 };
+    return null;
+  }
+
+  function findAgeOption(options, age) {
+    if (!Number.isFinite(age)) return null;
+
+    const matches = [];
+    for (const opt of options) {
+      const label = (opt.title || opt.text || opt.value || "").trim();
+      const range = parseAgeRange(label);
+      if (!range) continue;
+      if (age < range.min || age > range.max) continue;
+      const width = Math.max(range.max - range.min, 0);
+      matches.push({ opt, width, min: range.min });
+    }
+
+    if (matches.length === 0) return null;
+    matches.sort((a, b) => a.width - b.width || b.min - a.min);
+    return matches[0].opt;
+  }
+
   function getProfileSalaryK(profile) {
     const raw = String(profile?.salaryExpectation || "").trim().toLowerCase();
     if (!raw) return "";
@@ -657,6 +746,7 @@
   // ── Answer required <select> prescreening questions ─────────────────────
   async function answerSelectFields() {
     const profile = await getProfileFromBackground();
+    const profileAge = getProfileAge(profile);
     const selects = Array.from(document.querySelectorAll(
       "select[required], select.select-error"
     ));
@@ -664,8 +754,6 @@
 
     for (const sel of selects) {
       if (sel.disabled || sel.offsetParent === null) continue;
-      // Already answered — skip
-      if (sel.value && sel.value !== "") continue;
 
       // Get label text: prefer label[for=id], then aria-label, then name
       let labelText = "";
@@ -681,12 +769,28 @@
       );
       if (options.length === 0) continue;
 
+      const currentValue = sel.value && sel.value !== "" ? sel.value : "";
       let chosenValue = null;
+      let forcedByAge = false;
 
       const normalizedLabel = String(labelText || "").toLowerCase();
 
+      // Use profile birth date to answer age-range questions, even if preselected.
+      if (isAgeQuestion(normalizedLabel) && Number.isFinite(profileAge)) {
+        const ageOpt = findAgeOption(options, profileAge);
+        if (ageOpt?.value) {
+          chosenValue = ageOpt.value;
+          if (ageOpt.value === currentValue) {
+            continue; // already aligned with profile age
+          }
+          forcedByAge = true;
+        }
+      }
+
+      if (currentValue && !forcedByAge) continue;
+
       // Deterministic fallback for civility-like fields.
-      if (/civilit|genre|salutation|titre/i.test(normalizedLabel)) {
+      if (!chosenValue && /civilit|genre|salutation|titre/i.test(normalizedLabel)) {
         const desiredCivility = String(profile?.civility || "").trim().toLowerCase();
         const matchOption = (regexp) => options.find((o) => regexp.test((o.title || o.text || "").trim().toLowerCase()));
 
@@ -765,8 +869,9 @@
       sel.dispatchEvent(new Event("blur", { bubbles: true }));
 
       const chosenOpt = options.find((o) => o.value === chosenValue);
+      const ageNote = forcedByAge && Number.isFinite(profileAge) ? ` (âge profil: ${profileAge} ans)` : "";
       log(
-        `✅ Présélection "${labelText}" → "${(chosenOpt?.title || chosenOpt?.text || chosenValue).trim()}"`,
+        `✅ Présélection "${labelText}" → "${(chosenOpt?.title || chosenOpt?.text || chosenValue).trim()}"${ageNote}`,
         "success"
       );
       answered++;
