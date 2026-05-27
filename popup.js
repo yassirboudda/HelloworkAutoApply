@@ -3,9 +3,26 @@ const $ = (id) => document.getElementById(id);
 function playBeep(type = "stop") {
   try {
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().catch(() => {});
+    }
     const gainNode = audioCtx.createGain();
     gainNode.connect(audioCtx.destination);
-    gainNode.gain.value = 0.4;
+    gainNode.gain.value = 0.6;
+
+    if (type === "stop") {
+      [0, 220].forEach((delay, idx) => {
+        const osc = audioCtx.createOscillator();
+        osc.connect(gainNode);
+        osc.type = "sine";
+        osc.frequency.value = idx === 0 ? 760 : 560;
+        osc.start(audioCtx.currentTime + delay / 1000);
+        osc.stop(audioCtx.currentTime + delay / 1000 + 0.18);
+      });
+      setTimeout(() => audioCtx.close(), 1200);
+      return;
+    }
+
     if (type === "error") {
       [0, 350].forEach((delay) => {
         const osc = audioCtx.createOscillator();

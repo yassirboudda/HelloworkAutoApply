@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.11 — Better required text-field autofill (city/postal)
-  const VERSION = "1.0.11";
+  // v1.0.12 — Fallback profile values + improved stop beep
+  const VERSION = "1.0.12";
   let isRunning = false;
   let shouldStop = false;
 
@@ -20,9 +20,26 @@
   function playNotificationSound(type = "success") {
     try {
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
       const gainNode = audioCtx.createGain();
       gainNode.connect(audioCtx.destination);
-      gainNode.gain.value = 0.4;
+      gainNode.gain.value = 0.55;
+
+      if (type === "stop") {
+        // Double beep for manual stop action.
+        [0, 220].forEach((delay, idx) => {
+          const osc = audioCtx.createOscillator();
+          osc.connect(gainNode);
+          osc.type = "sine";
+          osc.frequency.value = idx === 0 ? 760 : 560;
+          osc.start(audioCtx.currentTime + delay / 1000);
+          osc.stop(audioCtx.currentTime + delay / 1000 + 0.18);
+        });
+        setTimeout(() => audioCtx.close(), 1200);
+        return;
+      }
 
       if (type === "error") {
         // Double low beep for errors
@@ -425,6 +442,32 @@
     return inferPostalCodeFromCity(getProfileCity(profile));
   }
 
+  function getFallbackFirstName(profile) {
+    const first = String(profile?.firstName || "").trim();
+    if (first) return first;
+    const full = String(profile?.fullName || "").trim();
+    const fromFull = full.split(/\s+/)[0] || "";
+    return fromFull || "John";
+  }
+
+  function getFallbackLastName(profile) {
+    const last = String(profile?.lastName || "").trim();
+    if (last) return last;
+    const full = String(profile?.fullName || "").trim();
+    const fromFull = full.split(/\s+/).slice(1).join(" ").trim();
+    return fromFull || "Doe";
+  }
+
+  function inferCityFromSearchUrl(searchUrl) {
+    try {
+      if (!searchUrl) return "";
+      const u = new URL(searchUrl, window.location.origin);
+      return (u.searchParams.get("l") || "").trim();
+    } catch (_err) {
+      return "";
+    }
+  }
+
   function getFieldLabel(el) {
     const label = el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.name || "";
     const parent = el.closest(".field, .form-group, [class*='form'], [class*='input']");
@@ -534,9 +577,12 @@
 
   async function detectAndFillForm() {
     const profile = await getProfileFromBackground();
+    const session = await getSession();
     const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea"));
-    const cityValue = getProfileCity(profile);
-    const postalCodeValue = getProfilePostalCode(profile);
+    const cityValue = getProfileCity(profile) || inferCityFromSearchUrl(session?.searchUrl || "") || "Paris";
+    const postalCodeValue = getProfilePostalCode(profile) || inferPostalCodeFromCity(cityValue) || "75000";
+    const firstNameValue = getFallbackFirstName(profile);
+    const lastNameValue = getFallbackLastName(profile);
     const phoneDigits = digitsOnly(profile.phone || "");
     
     let filled = 0;
@@ -562,12 +608,12 @@
         value = profile.email;
         shouldFill = true;
       }
-      else if (isNameField(fieldHint) && /prénom|first/.test(fieldHint) && profile.firstName) {
-        value = profile.firstName;
+      else if (isNameField(fieldHint) && /prénom|first/.test(fieldHint) && firstNameValue) {
+        value = firstNameValue;
         shouldFill = true;
       }
-      else if (isNameField(fieldHint) && /nom|last/.test(fieldHint) && profile.lastName) {
-        value = profile.lastName;
+      else if (isNameField(fieldHint) && /nom|last/.test(fieldHint) && lastNameValue) {
+        value = lastNameValue;
         shouldFill = true;
       }
       else if (isCityField(fieldHint) && cityValue) {
@@ -1076,7 +1122,13 @@
       runAutoApplySession().then(() => sendResponse({ ok: true }));
       return true;
     }
-    if (msg.action === "stopAutoApply") { shouldStop = true; sendResponse({ ok: true }); return; }
+    if (msg.action === "stopAutoApply") {
+      shouldStop = true;
+      playNotificationSound("stop");
+      log("Arrêt demandé", "warn");
+      sendResponse({ ok: true });
+      return;
+    }
     if (msg.action === "applySingleJob") { applySingleJob().then(() => sendResponse({ ok: true })); return true; }
     if (msg.action === "getContentStatus") { sendResponse({ isRunning, shouldStop, url: window.location.href }); return; }
   });
