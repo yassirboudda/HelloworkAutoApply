@@ -10,6 +10,7 @@ async function load() {
   $("email").value = profile.email || "";
   $("phone").value = profile.phone || "";
   $("location").value = profile.location || "";
+  $("postalCode").value = profile.postalCode || "";
   $("title").value = profile.title || "";
   $("experience").value = profile.experience || "";
   $("stack").value = profile.stack || "";
@@ -38,6 +39,7 @@ async function save() {
     email: $("email").value.trim(),
     phone: $("phone").value.trim(),
     location: $("location").value.trim(),
+    postalCode: $("postalCode").value.trim(),
     title: $("title").value.trim(),
     experience: $("experience").value.trim(),
     stack: $("stack").value.trim(),

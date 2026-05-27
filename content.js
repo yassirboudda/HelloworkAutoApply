@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.10 — Safer pagination and empty-page stop logic
-  const VERSION = "1.0.10";
+  // v1.0.11 — Better required text-field autofill (city/postal)
+  const VERSION = "1.0.11";
   let isRunning = false;
   let shouldStop = false;
 
@@ -370,6 +370,61 @@
     return /nom|name|prénom|first|last/i.test(label);
   }
 
+  function isCityField(label) {
+    return /\bville\b|\bcity\b|commune|localit/i.test(label);
+  }
+
+  function isPostalCodeField(label) {
+    return /code\s*postal|\bcp\b|postcode|zip|postal\s*code/i.test(label);
+  }
+
+  function digitsOnly(value) {
+    return String(value || "").replace(/\D+/g, "");
+  }
+
+  function extractPostalCode(value) {
+    const m = String(value || "").match(/\b\d{5}\b/);
+    return m ? m[0] : "";
+  }
+
+  function inferPostalCodeFromCity(city) {
+    const c = String(city || "").toLowerCase();
+    const map = {
+      paris: "75000",
+      lyon: "69000",
+      marseille: "13000",
+      lille: "59000",
+      bordeaux: "33000",
+      toulouse: "31000",
+      nantes: "44000",
+      rennes: "35000",
+      strasbourg: "67000",
+      nice: "06000",
+      montpellier: "34000",
+    };
+    for (const [k, v] of Object.entries(map)) {
+      if (c.includes(k)) return v;
+    }
+    return "";
+  }
+
+  function getProfileCity(profile) {
+    if (profile?.city) return String(profile.city).trim();
+    const location = String(profile?.location || "").trim();
+    if (!location) return "";
+    const primary = location.split(",")[0].trim();
+    const city = primary.replace(/\b\d{5}\b/g, "").replace(/\s{2,}/g, " ").trim();
+    return city;
+  }
+
+  function getProfilePostalCode(profile) {
+    const direct = extractPostalCode(profile?.postalCode || "");
+    if (direct) return direct;
+    const fromLocation = extractPostalCode(profile?.location || "");
+    if (fromLocation) return fromLocation;
+    return inferPostalCodeFromCity(getProfileCity(profile));
+  }
+
   function getFieldLabel(el) {
     const label = el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.name || "";
     const parent = el.closest(".field, .form-group, [class*='form'], [class*='input']");
@@ -480,6 +535,9 @@
   async function detectAndFillForm() {
     const profile = await getProfileFromBackground();
     const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input:not([type]), textarea"));
+    const cityValue = getProfileCity(profile);
+    const postalCodeValue = getProfilePostalCode(profile);
+    const phoneDigits = digitsOnly(profile.phone || "");
     
     let filled = 0;
     for (const field of fields) {
@@ -487,29 +545,85 @@
       if (field.value && field.value.trim().length > 0) continue;
 
       const label = getFieldLabel(field);
+      const fieldHint = [
+        label,
+        field.name || "",
+        field.id || "",
+        field.getAttribute("placeholder") || "",
+      ].join(" ").toLowerCase();
       let shouldFill = false;
       let value = null;
 
-      if (isPhoneField(label) && profile.phone) {
-        value = profile.phone;
+      if (isPhoneField(fieldHint) && phoneDigits) {
+        value = phoneDigits;
         shouldFill = true;
       }
-      else if (isEmailField(label) && profile.email) {
+      else if (isEmailField(fieldHint) && profile.email) {
         value = profile.email;
         shouldFill = true;
       }
-      else if (isNameField(label) && /prénom|first/.test(label) && profile.firstName) {
+      else if (isNameField(fieldHint) && /prénom|first/.test(fieldHint) && profile.firstName) {
         value = profile.firstName;
         shouldFill = true;
       }
-      else if (isNameField(label) && /nom|last/.test(label) && profile.lastName) {
+      else if (isNameField(fieldHint) && /nom|last/.test(fieldHint) && profile.lastName) {
         value = profile.lastName;
         shouldFill = true;
       }
+      else if (isCityField(fieldHint) && cityValue) {
+        value = cityValue;
+        shouldFill = true;
+      }
+      else if (isPostalCodeField(fieldHint) && postalCodeValue) {
+        value = postalCodeValue;
+        shouldFill = true;
+      }
+
+      // Generic fallback for required text fields when we still have no value.
+      if (!shouldFill && field.required) {
+        const wantsNumeric =
+          field.inputMode === "numeric" ||
+          /\[0-9\]|\\d|^[0-9+*?()[\]{}|.-]+$/.test(field.pattern || "") ||
+          /code postal|zip|postcode|téléphone|phone|mobile|portable|\bcp\b/.test(fieldHint);
+
+        if (wantsNumeric) {
+          const exactLen = field.maxLength > 0 ? field.maxLength : field.minLength;
+          if (exactLen === 5 && postalCodeValue) {
+            value = postalCodeValue;
+            shouldFill = true;
+          } else if (exactLen === 10 && phoneDigits) {
+            value = phoneDigits;
+            shouldFill = true;
+          } else if (postalCodeValue) {
+            value = postalCodeValue;
+            shouldFill = true;
+          }
+        } else if (cityValue) {
+          value = cityValue;
+          shouldFill = true;
+        }
+      }
 
       if (shouldFill && value) {
-        setFieldValue(field, value);
-        log(`✅ ${label} = ${value}`, "success");
+        let finalValue = String(value).trim();
+        if (!finalValue) continue;
+
+        // Respect common numeric constraints.
+        if (field.inputMode === "numeric" || /\[0-9\]|\\d/.test(field.pattern || "")) {
+          finalValue = digitsOnly(finalValue);
+        }
+
+        if (field.maxLength > 0 && finalValue.length > field.maxLength) {
+          finalValue = finalValue.slice(0, field.maxLength);
+        }
+
+        if (field.minLength > 0 && finalValue.length < field.minLength) {
+          continue;
+        }
+
+        setFieldValue(field, finalValue);
+        const fieldName = label || field.getAttribute("placeholder") || field.name || field.id || "champ";
+        log(`${fieldName} = ${finalValue}`, "success");
         filled++;
         await sleep(jitter(400, 800));
       }
