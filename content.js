@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.15 — Birth date profile field + autofill fallback
-  const VERSION = "1.0.15";
+  // v1.0.16 — Robust DOB format handling + better field/label detection
+  const VERSION = "1.0.16";
   let isRunning = false;
   let shouldStop = false;
 
@@ -412,7 +412,7 @@
   }
 
   function isBirthDateField(label) {
-    return /date\s*de\s*naissance|naissance|birth\s*date|\bdob\b/i.test(label);
+    return /date\s*de\s*naissance|naissance|birth\s*date|\bdob\b|mm\s*[\/-]\s*jj\s*[\/-]\s*aaaa|mm\s*[\/-]\s*dd\s*[\/-]\s*yyyy|dd\s*[\/-]\s*mm\s*[\/-]\s*yyyy/i.test(label);
   }
 
   function digitsOnly(value) {
@@ -491,6 +491,27 @@
     return normalizeBirthDate(profile?.birthDate || "") || "01/01/2000";
   }
 
+  function formatBirthDateForField(field, value, fieldHint = "") {
+    const normalized = normalizeBirthDate(value) || "01/01/2000";
+    const m = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) return "01012000";
+
+    const dd = m[1];
+    const mm = m[2];
+    const yyyy = m[3];
+    const wantsMonthFirst = /mm\s*[\/-]\s*(jj|dd)\s*[\/-]\s*(aaaa|yyyy)/i.test(fieldHint);
+
+    if (field.type === "date") {
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    if (field.maxLength > 0 && field.maxLength <= 8) {
+      return wantsMonthFirst ? `${mm}${dd}${yyyy}` : `${dd}${mm}${yyyy}`;
+    }
+
+    return wantsMonthFirst ? `${mm}/${dd}/${yyyy}` : `${dd}/${mm}/${yyyy}`;
+  }
+
   function getFallbackFirstName(profile) {
     const first = String(profile?.firstName || "").trim();
     if (first) return first;
@@ -518,10 +539,15 @@
   }
 
   function getFieldLabel(el) {
+    let explicitLabel = "";
+    if (el.id) {
+      const byFor = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      explicitLabel = (byFor?.textContent || "").trim();
+    }
     const label = el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.name || "";
-    const parent = el.closest(".field, .form-group, [class*='form'], [class*='input']");
+    const parent = el.closest(".field, .form-group, [class*='form'], [class*='input'], [data-controller*='input-validity']");
     const labelEl = parent?.querySelector("label, [class*='label']");
-    return (labelEl?.textContent || label || "").toLowerCase().trim();
+    return (explicitLabel || labelEl?.textContent || label || "").toLowerCase().trim();
   }
 
   function setFieldValue(el, value) {
@@ -561,8 +587,24 @@
 
       let chosenValue = null;
 
+      const normalizedLabel = String(labelText || "").toLowerCase();
+
+      // Deterministic fallback for civility-like fields.
+      if (/civilit|genre|salutation|titre/i.test(normalizedLabel)) {
+        const civilityMatch = options.find((o) => {
+          const t = (o.title || o.text || "").trim().toLowerCase();
+          return /monsieur|\bm\.?\b/.test(t);
+        });
+        if (civilityMatch) {
+          chosenValue = civilityMatch.value;
+        }
+      }
+
       // Try Mistral AI
       try {
+        if (chosenValue) {
+          throw new Error("skip_ai_deterministic");
+        }
         const profileForPrompt = {
           ...profile,
           // Limit CV text size to keep prompt lightweight and avoid token overflow
@@ -599,6 +641,14 @@
       }
 
       // Fallback: pick first available option
+      if (!chosenValue) {
+        const yesOpt = options.find((o) => /\boui\b/i.test((o.title || o.text || "").trim()));
+        const noOpt = options.find((o) => /\bnon\b/i.test((o.title || o.text || "").trim()));
+        if (yesOpt && noOpt) {
+          chosenValue = noOpt.value;
+        }
+      }
+
       if (!chosenValue) {
         chosenValue = options[0].value;
         log(
@@ -714,8 +764,8 @@
         let finalValue = String(value).trim();
         if (!finalValue) continue;
 
-        if (field.type === "date" && isBirthField) {
-          finalValue = birthDateToIso(finalValue) || "2000-01-01";
+        if (isBirthField) {
+          finalValue = formatBirthDateForField(field, finalValue, fieldHint);
         }
 
         // Respect common numeric constraints.
