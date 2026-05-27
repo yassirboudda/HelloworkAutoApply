@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.21 — Birth-date driven age-range select answers
-  const VERSION = "1.0.21";
+  // v1.0.22 — Robust salary amount filling for annual brut fields
+  const VERSION = "1.0.22";
   let isRunning = false;
   let shouldStop = false;
 
@@ -658,22 +658,71 @@
     return matches[0].opt;
   }
 
-  function getProfileSalaryK(profile) {
+  function getProfileSalaryAnnual(profile) {
     const raw = String(profile?.salaryExpectation || "").trim().toLowerCase();
-    if (!raw) return "";
+    if (!raw) return null;
 
-    const nums = raw.match(/\d{2,6}/g) || [];
-    if (nums.length === 0) return "";
+    const normalized = raw
+      .replace(/\u00a0/g, " ")
+      .replace(/,/g, ".")
+      .replace(/€|eur|euros?/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    let n = parseInt(nums[0], 10);
-    if (!Number.isFinite(n) || n <= 0) return "";
+    // Capture "35 000", "35000", "35.5", etc.
+    const tokens = normalized.match(/\d{1,3}(?:[ .]\d{3})+|\d+(?:\.\d+)?/g) || [];
+    if (tokens.length === 0) return null;
 
-    // If value looks annual euros (e.g. 45000), convert to kEUR when needed.
-    if (n >= 1000) {
-      n = Math.round(n / 1000);
+    const hasKUnit = /\bk\b|k\s*\/\s*an|k\s*an/.test(normalized);
+    const yearlyHint = /annuel|annuelle|par\s*an|brut\s*\/\s*an|hors\s*variables/.test(normalized);
+
+    let n = parseFloat(tokens[0].replace(/\s+/g, "").replace(/\./g, "."));
+    if (!Number.isFinite(n) || n <= 0) return null;
+
+    // Convert common shorthand (35k, 35) to annual gross amount.
+    if (hasKUnit && n < 1000) {
+      n = n * 1000;
+    } else if (n >= 20 && n <= 300) {
+      // Typical candidate input style for yearly expectations in kEUR.
+      n = n * 1000;
+    } else if (yearlyHint && n < 1000) {
+      n = n * 1000;
     }
 
-    return String(n);
+    return Math.round(n);
+  }
+
+  function formatSalaryForField(field, profile, fieldHint = "") {
+    const annual = getProfileSalaryAnnual(profile) || 35000;
+    const asAnnual = String(Math.round(annual));
+    const asK = String(Math.max(1, Math.round(annual / 1000)));
+
+    const minLen = field.minLength > 0 ? field.minLength : 0;
+    const maxLen = field.maxLength > 0 ? field.maxLength : 0;
+    const hint = normalizeText(fieldHint);
+
+    const wantsAnnual =
+      /brut|annuel|annuelle|par an|hors variables|pretention|salar/.test(hint) ||
+      minLen >= 5 ||
+      maxLen >= 5;
+
+    let candidate = wantsAnnual ? asAnnual : asK;
+
+    if (maxLen > 0 && candidate.length > maxLen) {
+      if (candidate === asAnnual && asK.length <= maxLen && (minLen === 0 || asK.length >= minLen)) {
+        candidate = asK;
+      } else {
+        candidate = candidate.slice(0, maxLen);
+      }
+    }
+
+    if (minLen > 0 && candidate.length < minLen) {
+      if (candidate !== asAnnual && asAnnual.length >= minLen && (maxLen === 0 || asAnnual.length <= maxLen)) {
+        candidate = asAnnual;
+      }
+    }
+
+    return candidate;
   }
 
   function formatBirthDateForField(field, value, fieldHint = "") {
@@ -888,7 +937,6 @@
     const cityValue = getProfileCity(profile) || inferCityFromSearchUrl(session?.searchUrl || "") || "Paris";
     const postalCodeValue = getProfilePostalCode(profile) || inferPostalCodeFromCity(cityValue) || "75000";
     const birthDateValue = getProfileBirthDate(profile);
-    const salaryValue = getProfileSalaryK(profile) || "35";
     const firstNameValue = getFallbackFirstName(profile);
     const lastNameValue = getFallbackLastName(profile);
     const phoneDigits = digitsOnly(profile.phone || "");
@@ -937,8 +985,8 @@
         value = postalCodeValue;
         shouldFill = true;
       }
-      else if (isSalaryField(fieldHint) && salaryValue) {
-        value = salaryValue;
+      else if (isSalaryField(fieldHint)) {
+        value = formatSalaryForField(field, profile, fieldHint);
         shouldFill = true;
       }
 
@@ -955,8 +1003,8 @@
             isSalaryField(fieldHint);
 
           if (wantsNumeric) {
-            if (isSalaryField(fieldHint) && salaryValue) {
-              value = salaryValue;
+            if (isSalaryField(fieldHint)) {
+              value = formatSalaryForField(field, profile, fieldHint);
               shouldFill = true;
             }
 
