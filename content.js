@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.13 — Popup status via stop button (no enabled checkbox)
-  const VERSION = "1.0.13";
+  // v1.0.14 — Fallback next-page probe when pagination links are missing
+  const VERSION = "1.0.14";
   let isRunning = false;
   let shouldStop = false;
 
@@ -290,6 +290,22 @@
       if (!Number.isFinite(current) || current < 1 || current >= maxPage) return "";
 
       u.searchParams.set(preferredKey, String(current + 1));
+      return normalizeUrl(u.toString());
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  // Some result pages don't render visible pagination links immediately.
+  // Probe the next page via URL parameters, while session guards prevent
+  // infinite traversal (`maxConsecutiveNoApplyPages` + visitedSearchUrls).
+  function buildFallbackNextPageUrl(currentSearchUrl) {
+    try {
+      const u = new URL(currentSearchUrl, window.location.origin);
+      const key = u.searchParams.has("p") ? "p" : "page";
+      const cur = parseInt(u.searchParams.get("page") || u.searchParams.get("p") || "1", 10);
+      if (!Number.isFinite(cur) || cur < 1 || cur >= 200) return "";
+      u.searchParams.set(key, String(cur + 1));
       return normalizeUrl(u.toString());
     } catch (_err) {
       return "";
@@ -829,8 +845,17 @@
         return;
       }
 
-      const nextUrl = findNextPageUrl(currentSearch);
+      let nextUrl = findNextPageUrl(currentSearch);
       const seenSearch = session.visitedSearchUrls || [];
+
+      if (!nextUrl) {
+        const fallbackNext = buildFallbackNextPageUrl(currentSearch);
+        if (fallbackNext && !seenSearch.includes(fallbackNext)) {
+          nextUrl = fallbackNext;
+          log("Pagination fallback (lien suivant introuvable): " + fallbackNext, "warn");
+        }
+      }
+
       if (!nextUrl || seenSearch.includes(nextUrl)) {
         await endSession("Fin: plus de nouvelles offres à visiter");
         return;
