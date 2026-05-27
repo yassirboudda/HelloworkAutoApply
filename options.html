@@ -26,7 +26,8 @@
     h1 { margin: 0 0 18px; font-size: 24px; }
     h2 { margin: 0 0 14px; font-size: 16px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-    input { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 13px; }
+    input, textarea { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 13px; }
+    textarea { min-height: 160px; resize: vertical; font-family: inherit; }
     label { font-size: 12px; display: block; margin-bottom: 4px; font-weight: 600; }
     button {
       border: 0;
@@ -61,6 +62,10 @@
         <div><label>Langues</label><input id="languages" placeholder="Français (natif), Anglais (courant)" /></div>
         <div><label>Disponibilité</label><input id="availability" placeholder="Disponible immédiatement" /></div>
         <div><label>Prétention salariale</label><input id="salaryExpectation" placeholder="50k-60k EUR/an" /></div>
+      </div>
+      <div style="margin-top: 12px;">
+        <label for="cvText">Contenu texte du CV (utilisé par Mistral)</label>
+        <textarea id="cvText" placeholder="Collez ici le contenu texte complet de votre CV..."></textarea>
       </div>
     </div>
 

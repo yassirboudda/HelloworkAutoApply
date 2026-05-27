@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.5";
+const EXT_VERSION = "1.0.8";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -18,6 +18,7 @@ const DEFAULT_PROFILE = {
   languages: "",
   availability: "",
   salaryExpectation: "",
+  cvText: "",
 };
 
 const DEFAULT_SETTINGS = {

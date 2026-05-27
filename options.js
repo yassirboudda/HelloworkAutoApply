@@ -16,6 +16,7 @@ async function load() {
   $("languages").value = profile.languages || "";
   $("availability").value = profile.availability || "";
   $("salaryExpectation").value = profile.salaryExpectation || "";
+  $("cvText").value = profile.cvText || "";
 
   // Mistral API key
   $("mistralApiKey").value = data.mistralApiKey || "";
@@ -43,6 +44,7 @@ async function save() {
     languages: $("languages").value.trim(),
     availability: $("availability").value.trim(),
     salaryExpectation: $("salaryExpectation").value.trim(),
+    cvText: $("cvText").value.trim(),
   };
 
   const mistralApiKey = $("mistralApiKey").value.trim();

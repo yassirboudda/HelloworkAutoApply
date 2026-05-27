@@ -3,7 +3,7 @@
   window.__HelloworkAutoApplyLoaded = true;
 
   // v1.0.4 — Multiapply submit button with scroll support
-  const VERSION = "1.0.7";
+  const VERSION = "1.0.8";
   let isRunning = false;
   let shouldStop = false;
 
@@ -319,7 +319,12 @@
 
       // Try Mistral AI
       try {
-        const profileContext = JSON.stringify(profile);
+        const profileForPrompt = {
+          ...profile,
+          // Limit CV text size to keep prompt lightweight and avoid token overflow
+          cvText: (profile?.cvText || "").slice(0, 4000),
+        };
+        const profileContext = JSON.stringify(profileForPrompt);
         const optionsList = options.map((o) => `"${(o.title || o.text).trim()}"`).join(", ");
         const answer = await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error("timeout")), 6000);
@@ -463,9 +468,17 @@
       if (text.includes("envoyer ma candidature")) score += 7;
       if (text === "continuer ma candidature") score += 10;
       if (text.includes("continuer ma candidature")) score += 8;
+      if ((el.getAttribute("type") || "").toLowerCase() === "submit") score += 6;
       if (el.tagName === "BUTTON") score += 3;
       if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
       if (el.closest("#postuler, [id*='postuler'], [class*='apply'], [class*='Apply']")) score += 5;
+      const form = el.closest("form");
+      if (form) {
+        score += 8;
+        if (form.querySelector("input, select, textarea")) score += 4;
+        const buttons = Array.from(form.querySelectorAll("button, [type='submit'], input[type='submit']"));
+        if (buttons[buttons.length - 1] === el) score += 3;
+      }
       // Detect via data attribute (Hellowork form validator)
       if (el.querySelector("[data-form-validator-target='text']")) score += 6;
       if (score > bestScore) { bestScore = score; best = el; }
@@ -609,11 +622,9 @@
 
     // Loop for multi-step forms (Hellowork shows "Continuer ma candidature" buttons)
     let prevBtn = firstBtn;
-    let prevBtnText = textOf(firstBtn).toLowerCase();
-    let stuckCount = 0;
 
     for (let step = 0; step < 8; step++) {
-      await sleep(jitter(1200, 2200));
+      await sleep(jitter(settings.delayBetweenSteps?.min ?? 1200, settings.delayBetweenSteps?.max ?? 2200));
       if (!isOfferPage(window.location.href)) break; // Page navigated away → done
 
       // Fill ALL form fields (text + selects) BEFORE looking for the submit button
@@ -626,25 +637,9 @@
       const nextBtn = findApplyButton({ exclude: prevBtn });
       if (!nextBtn) break; // No more buttons on this page
 
-      const nextBtnText = textOf(nextBtn).toLowerCase();
-
-      // Stuck detection: same button after filling — abort to prevent infinite loop
-      if (nextBtnText === prevBtnText) {
-        stuckCount++;
-        if (stuckCount >= 2) {
-          log(`⚠️ Formulaire bloqué (même bouton "${nextBtnText}" après ${stuckCount} tentatives) — abandon`, "warn");
-          break;
-        }
-        log(`⚠️ Même bouton "${nextBtnText}" — nouvelle tentative de remplissage`, "warn");
-        await sleep(jitter(1500, 2500));
-        continue;
-      }
-
-      stuckCount = 0;
       log(`Étape ${step + 2} — clic: "${textOf(nextBtn).slice(0, 80)}"`);
       await humanClick(nextBtn);
       prevBtn = nextBtn;
-      prevBtnText = nextBtnText;
     }
     // Page navigates to multiapply → script dies → handleMultiApplyPage continues
   }
