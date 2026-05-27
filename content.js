@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.4 — Multiapply submit button with scroll support
-  const VERSION = "1.0.8";
+  // v1.0.9 — Better offer submit targeting and redirect outcome handling
+  const VERSION = "1.0.9";
   let isRunning = false;
   let shouldStop = false;
 
@@ -128,6 +128,78 @@
 
   function textOf(el) {
     return (el?.textContent || "").trim();
+  }
+
+  function buttonLabel(el) {
+    if (!el) return "";
+    if (el.tagName === "INPUT") return (el.value || "").trim();
+    return textOf(el);
+  }
+
+  function canonicalUrlWithoutHash(url = window.location.href) {
+    try {
+      const u = new URL(url, window.location.origin);
+      u.hash = "";
+      return u.toString();
+    } catch (_err) {
+      return String(url || "");
+    }
+  }
+
+  function isLikelyFormSubmitButton(el) {
+    if (!el) return false;
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const form = el.closest("form");
+    const text = buttonLabel(el).toLowerCase();
+    if (type === "submit") return true;
+    if (!form) return false;
+    return /postuler|envoyer|continuer|valider|confirmer/i.test(text);
+  }
+
+  function findFormSubmitButton() {
+    let best = null;
+    let bestScore = -1;
+    const wanted = /postuler|envoyer|continuer|valider|confirmer/i;
+
+    for (const el of Array.from(document.querySelectorAll("form button, form [type='submit'], button[type='submit'], input[type='submit']"))) {
+      if (el.offsetParent === null) continue;
+      if (el.disabled) continue;
+
+      const text = buttonLabel(el).toLowerCase();
+      if (!wanted.test(text)) continue;
+
+      let score = 1;
+      const type = (el.getAttribute("type") || "").toLowerCase();
+      const form = el.closest("form");
+      if (type === "submit") score += 12;
+      if (form) {
+        score += 10;
+        if (form.querySelector("input[type='email'], input[type='file'], input[name*='FirstName'], input[name*='LastName'], select, textarea")) score += 10;
+        if (form.querySelector("[required]")) score += 4;
+        if (form.querySelector(".input-subtext-error, .select-error, [aria-invalid='true']")) score += 6;
+      }
+      if (text.includes("envoyer ma candidature")) score += 8;
+      if (text === "postuler") score += 4;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    return best;
+  }
+
+  async function waitForOfferNavigation(beforeUrl, timeoutMs = 9000) {
+    const before = canonicalUrlWithoutHash(beforeUrl);
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(250);
+      if (!isOfferPage(window.location.href)) return true;
+      const now = canonicalUrlWithoutHash(window.location.href);
+      if (now !== before) return true;
+    }
+    return false;
   }
 
   // ── Collect all offer links on a search page ────────────────────────────
@@ -500,6 +572,41 @@
   async function handleSearchPage(session, settings) {
     const currentSearch = normalizeUrl(window.location.href);
 
+    // Some Hellowork flows return directly to a search page after submit
+    // (without passing through /bounce/createalert). Finalize the previous
+    // offer outcome here so stats and persistence stay correct.
+    if (session.phase === "offer" && session.currentOfferUrl) {
+      const fallbackJobId = offerIdFromUrl(session.currentOfferUrl);
+      const fallbackTitle = session.currentJobTitle || ("Offre " + (fallbackJobId || "Hellowork"));
+      const fallbackCompany = session.currentJobCompany || "";
+
+      if (session.offerSubmitAttempted) {
+        await chrome.runtime.sendMessage({
+          action: "markApplied",
+          jobId: fallbackJobId,
+          title: fallbackTitle,
+          company: fallbackCompany,
+          url: session.currentOfferUrl,
+        });
+        log("Candidature soumise (retour recherche sans page de confirmation): " + fallbackTitle, "success");
+      } else {
+        await chrome.runtime.sendMessage({
+          action: "markSkipped",
+          jobId: fallbackJobId,
+          title: fallbackTitle,
+          url: session.currentOfferUrl,
+          reason: "Retour recherche sans soumission",
+        });
+        log("Offre ignorée (retour recherche sans soumission): " + fallbackTitle, "warn");
+      }
+
+      session = await setSession({
+        phase: "search",
+        currentOfferUrl: "",
+        offerSubmitAttempted: false,
+      });
+    }
+
     // After applying, Hellowork redirects to a DIFFERENT search (related jobs).
     // If the current URL doesn't match our session search, go back to ours.
     if (session.searchUrl && !isSameSearchContext(session.searchUrl, currentSearch)) {
@@ -553,6 +660,7 @@
       currentOfferUrl: target.url,
       currentJobTitle: target.title || "",
       currentJobCompany: "",
+      offerSubmitAttempted: false,
       visitedOffers: { ...visitedOffers, [key]: true },
     });
 
@@ -569,7 +677,13 @@
     const offerKey = jobId || normalizeUrl(window.location.href);
 
     // Save job info so createalert handler can mark it applied correctly
-    await setSession({ currentJobTitle: title, currentJobCompany: company, currentOfferUrl: window.location.href });
+    await setSession({
+      currentJobTitle: title,
+      currentJobCompany: company,
+      currentOfferUrl: window.location.href,
+      phase: "offer",
+      offerSubmitAttempted: false,
+    });
     log("Offre: " + title + " @ " + company);
 
     // External flow: "Postuler sur le site du recruteur" should be skipped to avoid leaving Hellowork.
@@ -598,7 +712,7 @@
       return;
     }
 
-    const firstBtn = findApplyButton();
+    const firstBtn = findFormSubmitButton() || findApplyButton();
     if (!firstBtn) {
       log("Ignorée (pas de bouton postuler): " + title, "warn");
       await chrome.runtime.sendMessage({ action: "markSkipped", jobId, title, url: window.location.href, reason: "Bouton postuler introuvable" });
@@ -611,8 +725,18 @@
       return;
     }
 
-    log("1er clic postuler: \"" + textOf(firstBtn).slice(0, 80) + "\"");
+    const firstLabel = buttonLabel(firstBtn).slice(0, 80);
+    const firstIsSubmit = isLikelyFormSubmitButton(firstBtn);
+    log("1er clic postuler: \"" + firstLabel + "\"" + (firstIsSubmit ? " [submit]" : ""));
+    const firstClickUrl = window.location.href;
     await humanClick(firstBtn);
+    if (firstIsSubmit) {
+      await setSession({ offerSubmitAttempted: true });
+    }
+
+    if (await waitForOfferNavigation(firstClickUrl, 3000)) {
+      return;
+    }
 
 
     // Fill any forms visible after clicking the first button
@@ -621,7 +745,8 @@
     await answerSelectFields();
 
     // Loop for multi-step forms (Hellowork shows "Continuer ma candidature" buttons)
-    let prevBtn = firstBtn;
+    let repeatedNonSubmit = 0;
+    let lastNonSubmitFingerprint = "";
 
     for (let step = 0; step < 8; step++) {
       await sleep(jitter(settings.delayBetweenSteps?.min ?? 1200, settings.delayBetweenSteps?.max ?? 2200));
@@ -634,12 +759,47 @@
       // Extra wait if selects were just answered (let Stimulus controller validate)
       if (selectsFilled > 0) await sleep(jitter(500, 900));
 
-      const nextBtn = findApplyButton({ exclude: prevBtn });
+      const nextBtn = findFormSubmitButton() || findApplyButton();
       if (!nextBtn) break; // No more buttons on this page
 
-      log(`Étape ${step + 2} — clic: "${textOf(nextBtn).slice(0, 80)}"`);
+      const nextIsSubmit = isLikelyFormSubmitButton(nextBtn);
+      const nextLabel = buttonLabel(nextBtn);
+      const nextFp = `${nextBtn.tagName}|${(nextBtn.getAttribute("type") || "").toLowerCase()}|${(nextBtn.getAttribute("href") || "").slice(0, 120)}|${nextLabel.toLowerCase()}`;
+
+      if (!nextIsSubmit && nextFp === lastNonSubmitFingerprint) {
+        repeatedNonSubmit++;
+        if (repeatedNonSubmit >= 2) {
+          log(`⚠️ Même CTA non-submit détecté ("${nextLabel.slice(0, 80)}") — arrêt des clics répétitifs`, "warn");
+          break;
+        }
+      } else if (!nextIsSubmit) {
+        repeatedNonSubmit = 0;
+      }
+      if (!nextIsSubmit) {
+        lastNonSubmitFingerprint = nextFp;
+      }
+
+      log(`Étape ${step + 2} — clic: "${nextLabel.slice(0, 80)}"${nextIsSubmit ? " [submit]" : ""}`);
+      const beforeClickUrl = window.location.href;
       await humanClick(nextBtn);
-      prevBtn = nextBtn;
+      if (nextIsSubmit) {
+        await setSession({ offerSubmitAttempted: true });
+      }
+
+      // If submit triggered full navigation or page-path change, stop loop.
+      const navigated = await waitForOfferNavigation(beforeClickUrl, nextIsSubmit ? 9000 : 3000);
+      if (navigated) return;
+    }
+
+    // Safety fallback: avoid staying stuck forever on the same offer page.
+    if (isOfferPage(window.location.href)) {
+      const refreshed = await getSession();
+      if (refreshed?.searchUrl) {
+        log("Retour recherche (aucune navigation détectée après tentative)", "warn");
+        await setSession({ phase: "search", currentOfferUrl: "", offerSubmitAttempted: false });
+        await sleep(jitter(1200, 2200));
+        window.location.href = refreshed.searchUrl;
+      }
     }
     // Page navigates to multiapply → script dies → handleMultiApplyPage continues
   }
