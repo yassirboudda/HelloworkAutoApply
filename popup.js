@@ -75,7 +75,6 @@ async function refresh() {
   const state = await sendToBackground({ action: "getState" });
   if (!state) return;
 
-  $("enabled").checked = state.enabled;
   $("applied").textContent = state.stats?.applied || 0;
   $("skipped").textContent = state.stats?.skipped || 0;
   $("errors").textContent = state.stats?.errors || 0;
@@ -84,23 +83,29 @@ async function refresh() {
 
   const session = state.session;
   const statusEl = $("status");
+  const stopBtn = $("stopBtn");
+  const startBtn = $("startBtn");
+
   if (session?.active) {
     statusEl.textContent = `Etat: session active | page ${1 + (session.currentPage || 0)} | ${session.applied || 0}/${session.maxJobs || 25}`;
     statusEl.style.background = "#dcfce7";
+    stopBtn.disabled = false;
+    stopBtn.textContent = "Arreter (actif)";
+    startBtn.disabled = true;
+    startBtn.textContent = "Session active";
   } else {
     statusEl.textContent = "Etat: inactif";
     statusEl.style.background = "#f3f4f6";
+    stopBtn.disabled = true;
+    stopBtn.textContent = "Arrete";
+    startBtn.disabled = false;
+    startBtn.textContent = "Demarrer session";
   }
 
   const lines = state.log || [];
   $("log").textContent = lines.slice(-80).join("\n") || "Aucun log";
   $("log").scrollTop = $("log").scrollHeight;
 }
-
-$("enabled").addEventListener("change", async (e) => {
-  await sendToBackground({ action: "setEnabled", enabled: e.target.checked });
-  await refresh();
-});
 
 $("startBtn").addEventListener("click", async () => {
   const keywords = $("keywords").value.trim();

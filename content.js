@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.12 — Fallback profile values + improved stop beep
-  const VERSION = "1.0.12";
+  // v1.0.13 — Popup status via stop button (no enabled checkbox)
+  const VERSION = "1.0.13";
   let isRunning = false;
   let shouldStop = false;
 

@@ -43,8 +43,13 @@
       cursor: pointer;
       font-weight: 600;
     }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
     .btn-main { background: #ff6f61; color: white; }
     .btn-stop { background: #b91c1c; color: white; }
+    .btn-stop:disabled { background: #9ca3af; color: #f9fafb; }
     .btn-muted { background: #e5e7eb; color: #111827; }
     .status { font-size: 12px; padding: 8px; border-radius: 8px; background: #f3f4f6; }
     .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 8px; }
@@ -63,26 +68,15 @@
       line-height: 1.4;
       white-space: pre-wrap;
     }
-    .toggle {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-    }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="title">Hellowork AutoApply</div>
-    <div class="v">v1.0.12</div>
+    <div class="v">v1.0.13</div>
   </div>
 
   <div class="block">
-    <div class="toggle">
-      <input type="checkbox" id="enabled" checked />
-      <label for="enabled">Extension activée</label>
-    </div>
-    <div style="height:8px"></div>
     <div class="row">
       <input id="keywords" placeholder="Ex: Controleur de gestion" />
       <input id="location" placeholder="Ex: Paris" />
@@ -101,7 +95,7 @@
     <div style="height:8px"></div>
     <div class="row">
       <button class="btn-main" id="startBtn">Demarrer session</button>
-      <button class="btn-stop" id="stopBtn">Arreter</button>
+      <button class="btn-stop" id="stopBtn" disabled>Arrete</button>
     </div>
     <div style="height:8px"></div>
     <div class="row">
