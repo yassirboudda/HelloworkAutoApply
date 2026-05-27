@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.18 — Cycle restart on pagination end + salary-field guard
-  const VERSION = "1.0.18";
+  // v1.0.19 — Sequential page traversal + civility profile support
+  const VERSION = "1.0.19";
   let isRunning = false;
   let shouldStop = false;
 
@@ -115,6 +115,54 @@
     const ca = canonicalSearchContext(a);
     const cb = canonicalSearchContext(b);
     return !!ca && ca === cb;
+  }
+
+  function isSameSearchIntent(a, b) {
+    try {
+      const ua = new URL(a, window.location.origin);
+      const ub = new URL(b, window.location.origin);
+      if (!isSearchPage(ua.toString()) || !isSearchPage(ub.toString())) return false;
+
+      const ka = (ua.searchParams.get("k") || "").trim().toLowerCase();
+      const kb = (ub.searchParams.get("k") || "").trim().toLowerCase();
+      const la = (ua.searchParams.get("l") || "").trim().toLowerCase();
+      const lb = (ub.searchParams.get("l") || "").trim().toLowerCase();
+
+      if (ka || kb || la || lb) return ka === kb && la === lb;
+      return isSameSearchContext(ua.toString(), ub.toString());
+    } catch (_err) {
+      return isSameSearchContext(a, b);
+    }
+  }
+
+  function searchPageNumber(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      const p = parseInt(u.searchParams.get("p") || u.searchParams.get("page") || "1", 10);
+      return Number.isFinite(p) && p > 0 ? p : 1;
+    } catch (_err) {
+      return 1;
+    }
+  }
+
+  function searchPageKey(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      if (!isSearchPage(u.toString())) return canonicalUrlWithoutHash(u.toString());
+
+      const params = [];
+      for (const [k, v] of u.searchParams.entries()) {
+        if (k === "p" || k === "page") continue;
+        if (k === "k_autocomplete" || k === "l_autocomplete") continue;
+        params.push([k, v]);
+      }
+      params.push(["page", String(searchPageNumber(u.toString()))]);
+      params.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+      const qs = params.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+      return `${u.origin}${u.pathname}${qs ? "?" + qs : ""}`;
+    } catch (_err) {
+      return canonicalUrlWithoutHash(url);
+    }
   }
 
   function offerIdFromUrl(url = window.location.href) {
@@ -624,12 +672,18 @@
 
       // Deterministic fallback for civility-like fields.
       if (/civilit|genre|salutation|titre/i.test(normalizedLabel)) {
-        const civilityMatch = options.find((o) => {
-          const t = (o.title || o.text || "").trim().toLowerCase();
-          return /monsieur|\bm\.?\b/.test(t);
-        });
-        if (civilityMatch) {
-          chosenValue = civilityMatch.value;
+        const desiredCivility = String(profile?.civility || "").trim().toLowerCase();
+        const matchOption = (regexp) => options.find((o) => regexp.test((o.title || o.text || "").trim().toLowerCase()));
+
+        const monsieurMatch = matchOption(/\bmonsieur\b|\bm\.?\b|\bmr\b|\bhomme\b/);
+        const madameMatch = matchOption(/\bmadame\b|\bmme\b|\bmlle\b|\bmrs\b|\bms\b|\bfemme\b/);
+
+        if (/madame|mme|female|femme/.test(desiredCivility)) {
+          chosenValue = madameMatch?.value || monsieurMatch?.value || null;
+        } else if (/monsieur|mr|male|homme/.test(desiredCivility)) {
+          chosenValue = monsieurMatch?.value || madameMatch?.value || null;
+        } else {
+          chosenValue = monsieurMatch?.value || madameMatch?.value || null;
         }
       }
 
@@ -914,8 +968,8 @@
   // SEARCH PAGE: pick next unvisited offer from the queue
   async function handleSearchPage(session, settings) {
     const currentSearch = normalizeUrl(window.location.href);
-    const configuredNoApplyPages = parseInt(settings.maxConsecutiveNoApplyPages || 3, 10);
-    const maxNoApplyPages = Math.max(Number.isFinite(configuredNoApplyPages) ? configuredNoApplyPages : 3, 3);
+    const configuredNoApplyPages = parseInt(settings.maxConsecutiveNoApplyPages || 20, 10);
+    const maxNoApplyPages = Math.max(Number.isFinite(configuredNoApplyPages) ? configuredNoApplyPages : 20, 1);
 
     // Some Hellowork flows return directly to a search page after submit
     // (without passing through /bounce/createalert). Finalize the previous
@@ -952,16 +1006,26 @@
       });
     }
 
-    // After applying, Hellowork redirects to a DIFFERENT search (related jobs).
-    // If the current URL doesn't match our session search, go back to ours.
-    if (session.searchUrl && !isSameSearchContext(session.searchUrl, currentSearch)) {
-      log("Page de recherche inattendue (redirect Hellowork) — retour session: " + session.searchUrl);
-      window.location.href = session.searchUrl;
+    if (!session.searchUrl) {
+      session = await setSession({ searchUrl: currentSearch, resumeSearchUrl: currentSearch });
+    } else if (!session.resumeSearchUrl) {
+      session = await setSession({ resumeSearchUrl: currentSearch });
+    }
+
+    const preferredSearchUrl = session.resumeSearchUrl || session.searchUrl || currentSearch;
+
+    // Hellowork may redirect to an unrelated search context. Keep session intent.
+    if (preferredSearchUrl && !isSameSearchIntent(preferredSearchUrl, currentSearch)) {
+      log("Page de recherche inattendue (redirect Hellowork) — retour session: " + preferredSearchUrl);
+      window.location.href = preferredSearchUrl;
       return;
     }
 
-    if (!session.searchUrl) {
-      session = await setSession({ searchUrl: currentSearch });
+    // Keep scanning current page sequence (p=2, p=3, ...), not always page 1.
+    if (session.resumeSearchUrl && searchPageKey(session.resumeSearchUrl) !== searchPageKey(currentSearch)) {
+      log("Retour à la page de résultats en cours: " + session.resumeSearchUrl);
+      window.location.href = session.resumeSearchUrl;
+      return;
     }
 
     // Load persistent applied/skipped jobs from storage (across all sessions)
@@ -983,44 +1047,42 @@
 
     if (queue.length === 0) {
       const noNewOfferPages = (session.noNewOfferPages || 0) + 1;
-      if (noNewOfferPages > maxNoApplyPages) {
-        await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
-        return;
-      }
 
       let nextUrl = findNextPageUrl(currentSearch);
-      const seenSearch = session.visitedSearchUrls || [];
+      const seenSearch = Array.from(new Set((session.visitedSearchUrls || []).map((u) => searchPageKey(u))));
+      let usedFallback = false;
 
       if (!nextUrl) {
         const fallbackNext = buildFallbackNextPageUrl(currentSearch);
-        if (fallbackNext && !seenSearch.includes(fallbackNext)) {
+        if (fallbackNext) {
           nextUrl = fallbackNext;
+          usedFallback = true;
           log("Pagination fallback (lien suivant introuvable): " + fallbackNext, "warn");
         }
       }
 
-      if (!nextUrl || seenSearch.includes(nextUrl)) {
-        const restartUrl = session.searchUrl || currentSearch;
-        await setSession({
-          currentPage: 1,
-          noNewOfferPages,
-          visitedSearchUrls: [],
-          // Keep searchUrl unchanged so redirect-guard still works.
-        });
-        log(`Aucune page suivante détectée — nouveau cycle (${noNewOfferPages}/${maxNoApplyPages})`, "warn");
+      const nextSearchKey = nextUrl ? searchPageKey(nextUrl) : "";
 
-        if (canonicalUrlWithoutHash(restartUrl) === canonicalUrlWithoutHash(currentSearch)) {
-          window.location.reload();
+      // When fallback keeps generating empty pages, stop after configured guard.
+      if (usedFallback && noNewOfferPages > maxNoApplyPages) {
+        await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
+        return;
+      }
+
+      if (!nextUrl || seenSearch.includes(nextSearchKey)) {
+        if (noNewOfferPages > maxNoApplyPages) {
+          await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
         } else {
-          window.location.href = restartUrl;
+          await endSession("Fin: toutes les pages de résultats ont été parcourues");
         }
         return;
       }
+
       await setSession({
-        currentPage: (session.currentPage || 0) + 1,
+        currentPage: searchPageNumber(nextUrl),
         noNewOfferPages,
-        visitedSearchUrls: [...seenSearch, nextUrl],
-        // Keep searchUrl pointing to the ORIGINAL search so redirect-guard still works
+        resumeSearchUrl: nextUrl,
+        visitedSearchUrls: [...seenSearch, nextSearchKey],
       });
       log(`Page suivante (${noNewOfferPages}/${maxNoApplyPages} sans nouvelles): ${nextUrl}`);
       window.location.href = nextUrl;
@@ -1036,6 +1098,7 @@
       currentJobCompany: "",
       offerSubmitAttempted: false,
       noNewOfferPages: 0,
+      resumeSearchUrl: currentSearch,
       visitedOffers: { ...visitedOffers, [key]: true },
     });
 

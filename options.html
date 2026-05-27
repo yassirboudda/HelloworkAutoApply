@@ -26,7 +26,7 @@
     h1 { margin: 0 0 18px; font-size: 24px; }
     h2 { margin: 0 0 14px; font-size: 16px; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-    input, textarea { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 13px; }
+    input, textarea, select { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; font-size: 13px; }
     textarea { min-height: 160px; resize: vertical; font-family: inherit; }
     label { font-size: 12px; display: block; margin-bottom: 4px; font-weight: 600; }
     button {
@@ -53,6 +53,7 @@
       <h2>👤 Profil Candidat</h2>
       <div class="grid">
         <div><label>Nom complet</label><input id="fullName" placeholder="John Doe" /></div>
+        <div><label>Civilité</label><select id="civility"><option value="">Auto</option><option value="monsieur">Monsieur</option><option value="madame">Madame</option></select></div>
         <div><label>Email</label><input id="email" type="email" placeholder="jean@example.com" /></div>
         <div><label>Téléphone</label><input id="phone" placeholder="0600000000" /></div>
         <div><label>Localisation</label><input id="location" placeholder="Paris" /></div>
@@ -83,7 +84,7 @@
       <h2>⚙️ Réglages Automation</h2>
       <div class="grid">
         <div><label>Max offres/session</label><input id="maxJobsPerSession" type="number" min="1" max="100" /></div>
-        <div><label>Pages sans apply avant stop</label><input id="maxNoApplyPages" type="number" min="1" max="20" /></div>
+        <div><label>Pages sans apply avant stop</label><input id="maxNoApplyPages" type="number" min="1" max="50" /></div>
         <div><label>Délai entre offres MIN (ms)</label><input id="delayJobMin" type="number" min="1000" /></div>
         <div><label>Délai entre offres MAX (ms)</label><input id="delayJobMax" type="number" min="1000" /></div>
         <div><label>Délai entre étapes MIN (ms)</label><input id="delayStepMin" type="number" min="100" /></div>

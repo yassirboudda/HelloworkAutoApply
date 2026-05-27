@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.18";
+const EXT_VERSION = "1.0.19";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -7,6 +7,7 @@ const DEFAULT_MISTRAL_API_KEY = "uwqtlWhrRDIdE0QAHYkIhMFkLTbkDYIb";
 
 const DEFAULT_PROFILE = {
   fullName: "",
+  civility: "",
   firstName: "",
   lastName: "",
   email: "",
@@ -29,7 +30,7 @@ const DEFAULT_SETTINGS = {
   delayBetweenSteps: { min: 700, max: 1600 },
   autoSubmit: true,
   onlyEasyApply: true,
-  maxConsecutiveNoApplyPages: 3,
+  maxConsecutiveNoApplyPages: 20,
 };
 
 // ── Mistral API Call ───────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       const session = {
         active: true,
         searchUrl: msg.searchUrl || "",
+        resumeSearchUrl: msg.searchUrl || "",
         currentOfferUrl: "",
         currentJobTitle: "",
         currentJobCompany: "",
@@ -143,6 +145,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         visitedOffers: {},
         externalSiteOffers: {},
         visitedSearchUrls: [],
+        noNewOfferPages: 0,
         maxJobs: msg.maxJobs || 25,
       };
       await chrome.storage.local.set({ session, enabled: true });

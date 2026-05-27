@@ -7,6 +7,7 @@ async function load() {
 
   // Profile fields
   $("fullName").value = profile.fullName || "";
+  $("civility").value = profile.civility || "";
   $("email").value = profile.email || "";
   $("phone").value = profile.phone || "";
   $("location").value = profile.location || "";
@@ -29,12 +30,13 @@ async function load() {
   $("delayJobMax").value = settings.delayBetweenJobs?.max || 14000;
   $("delayStepMin").value = settings.delayBetweenSteps?.min || 700;
   $("delayStepMax").value = settings.delayBetweenSteps?.max || 1600;
-  $("maxNoApplyPages").value = settings.maxConsecutiveNoApplyPages || 3;
+  $("maxNoApplyPages").value = settings.maxConsecutiveNoApplyPages || 20;
 }
 
 async function save() {
   const profile = {
     fullName: $("fullName").value.trim(),
+    civility: $("civility").value.trim().toLowerCase(),
     firstName: $("fullName").value.trim().split(" ")[0],
     lastName: $("fullName").value.trim().split(" ").slice(1).join(" "),
     email: $("email").value.trim(),
@@ -64,7 +66,7 @@ async function save() {
     },
     autoSubmit: true,
     onlyEasyApply: true,
-    maxConsecutiveNoApplyPages: Math.min(Math.max(parseInt($("maxNoApplyPages").value, 10) || 3, 1), 20),
+    maxConsecutiveNoApplyPages: Math.min(Math.max(parseInt($("maxNoApplyPages").value, 10) || 20, 1), 50),
   };
 
   await chrome.storage.local.set({ profile, autoApplySettings });
