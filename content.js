@@ -2,8 +2,8 @@
   if (window.__HelloworkAutoApplyLoaded) return;
   window.__HelloworkAutoApplyLoaded = true;
 
-  // v1.0.23 — Resume-last-session workflow support
-  const VERSION = "1.0.23";
+  // v1.0.26 — Blacklisted companies (profil candidat)
+  const VERSION = "1.0.28";
   let isRunning = false;
   let shouldStop = false;
 
@@ -211,14 +211,29 @@
     }
   }
 
+  function isOfferMainStepForm(form) {
+    if (!form) return false;
+    return (form.id || "").toLowerCase() === "offer-detail-main-step-form";
+  }
+
+  function getVisibleOfferMainStepForm() {
+    const form = document.querySelector("#offer-detail-main-step-form");
+    if (!form) return null;
+    if (form.offsetParent === null) return null;
+    return form;
+  }
+
   function isLikelyFormSubmitButton(el) {
     if (!el) return false;
     const type = (el.getAttribute("type") || "").toLowerCase();
     const form = el.closest("form");
+    const formAttr = (el.getAttribute("form") || "").trim();
     const text = buttonLabel(el).toLowerCase();
     if (type === "submit") return true;
+    if (formAttr.toLowerCase() === "offer-detail-main-step-form") return true;
     if (!form) return false;
-    return /postuler|envoyer|continuer|valider|confirmer/i.test(text);
+    if (isOfferMainStepForm(form)) return true;
+    return /postuler|envoyer|continuer|valider|confirmer|suivant/i.test(text);
   }
 
   function findFormSubmitButton() {
@@ -226,25 +241,66 @@
     let bestScore = -1;
     const wanted = /postuler|envoyer|continuer|valider|confirmer/i;
 
-    for (const el of Array.from(document.querySelectorAll("form button, form [type='submit'], button[type='submit'], input[type='submit']"))) {
+    for (const el of Array.from(document.querySelectorAll("form button, form [type='submit'], button[type='submit'], input[type='submit'], button[form], input[type='submit'][form]"))) {
       if (el.offsetParent === null) continue;
       if (el.disabled) continue;
 
       const text = buttonLabel(el).toLowerCase();
-      if (!wanted.test(text)) continue;
+      const form = el.closest("form");
+      const formAttr = (el.getAttribute("form") || "").trim();
+      const bindsMainStep = formAttr.toLowerCase() === "offer-detail-main-step-form";
+      const hasValidatorAttrs =
+        el.matches("[data-cy='submitButton']") ||
+        el.matches("[data-form-validator-target='button']") ||
+        !!el.querySelector("[data-form-validator-target='text']");
+
+      if (!wanted.test(text) && !bindsMainStep && !hasValidatorAttrs) continue;
 
       let score = 1;
       const type = (el.getAttribute("type") || "").toLowerCase();
-      const form = el.closest("form");
       if (type === "submit") score += 12;
       if (form) {
         score += 10;
         if (form.querySelector("input[type='email'], input[type='file'], input[name*='FirstName'], input[name*='LastName'], select, textarea")) score += 10;
         if (form.querySelector("[required]")) score += 4;
         if (form.querySelector(".input-subtext-error, .select-error, [aria-invalid='true']")) score += 6;
+        if (isOfferMainStepForm(form)) score += 18;
       }
+      if (bindsMainStep) score += 22;
+      if (hasValidatorAttrs) score += 10;
       if (text.includes("envoyer ma candidature")) score += 8;
+      if (text.includes("continuer ma candidature")) score += 10;
       if (text === "postuler") score += 4;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    return best;
+  }
+
+  function findOfferMainStepSubmitButton() {
+    const candidates = Array.from(document.querySelectorAll(
+      "button[form='offer-detail-main-step-form'], input[type='submit'][form='offer-detail-main-step-form'], #offer-detail-main-step-form button[type='submit'], #offer-detail-main-step-form input[type='submit'], #offer-detail-step-frame [data-cy='submitButton']"
+    ));
+
+    let best = null;
+    let bestScore = -1;
+
+    for (const el of candidates) {
+      if (!el || el.offsetParent === null || el.disabled) continue;
+
+      const text = buttonLabel(el).toLowerCase();
+      let score = 1;
+      if ((el.getAttribute("type") || "").toLowerCase() === "submit") score += 12;
+      if ((el.getAttribute("form") || "").toLowerCase() === "offer-detail-main-step-form") score += 20;
+      if (el.matches("[data-cy='submitButton']")) score += 14;
+      if (el.matches("[data-form-validator-target='button']")) score += 8;
+      if (text.includes("continuer ma candidature")) score += 16;
+      if (text.includes("continuer")) score += 10;
+      if (text.includes("postuler")) score += 5;
 
       if (score > bestScore) {
         bestScore = score;
@@ -269,7 +325,7 @@
 
   // ── Collect all offer links on a search page ────────────────────────────
   function collectOfferLinks() {
-    const anchors = Array.from(document.querySelectorAll('a[href*="/fr-fr/emplois/"]'));
+    const anchors = Array.from(document.querySelectorAll('a[href*="/emplois/"]'));
     const links = [];
     const seen = new Set();
     for (const a of anchors) {
@@ -277,11 +333,37 @@
       if (!href) continue;
       const abs = normalizeUrl(new URL(href, window.location.origin).toString());
       if (!isOfferPage(abs)) continue;
-      if (seen.has(abs)) continue;
-      seen.add(abs);
-      links.push({ url: abs, jobId: offerIdFromUrl(abs), title: textOf(a).substring(0, 180) });
+      const jobId = offerIdFromUrl(abs);
+      const dedupeKey = jobId || abs;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const anchorText = textOf(a);
+      const card =
+        a.closest("article, li, [data-cy], [class*='offer'], [class*='Offer'], [class*='card']") ||
+        a.parentElement;
+      let company = "";
+      if (card) {
+        const entLink = card.querySelector('a[href*="/entreprises/"]');
+        if (entLink) company = textOf(entLink);
+      }
+      if (!company) company = extractCompanyFromText(anchorText);
+      links.push({
+        url: abs,
+        jobId,
+        title: anchorText.substring(0, 180),
+        company,
+      });
     }
     return links;
+  }
+
+  function sessionSearchReturnUrl(session, currentSearch = window.location.href) {
+    const resume = session?.resumeSearchUrl || "";
+    const base = session?.searchUrl || "";
+    if (isSearchPage(resume)) return normalizeUrl(resume);
+    if (isSearchPage(base)) return normalizeUrl(base);
+    if (isSearchPage(currentSearch)) return normalizeUrl(currentSearch);
+    return "";
   }
 
   // ── Find next page URL on search results ───────────────────────────────
@@ -386,16 +468,75 @@
     }
   }
 
+  // ── Blacklist Check ─────────────────────────────────────────────────────
+  async function isCompanyBlacklisted(companyName) {
+    if (!companyName) return false;
+    try {
+      const { blacklistedCompanies = [] } = await chrome.storage.local.get(["blacklistedCompanies"]);
+      if (blacklistedCompanies.length === 0) return false;
+      const companyLower = companyName.toLowerCase().trim();
+      for (const blocked of blacklistedCompanies) {
+        const blockedLower = blocked.toLowerCase().trim();
+        if (!blockedLower) continue;
+        if (companyLower.includes(blockedLower) || blockedLower.includes(companyLower)) {
+          log(`🚫 Entreprise blacklistée: "${companyName}" (match: "${blocked}")`, "warn");
+          return true;
+        }
+      }
+    } catch (err) {
+      log(`Erreur vérif blacklist: ${err.message}`, "warn");
+    }
+    return false;
+  }
+
+  // Extract company name from offer card text (search results) or page body
+  function isLikelyNonCompanyLine(line) {
+    if (!line) return true;
+    if (/^(CDI|CDD|Intérim|Stage|Alternance|Freelance|Indépendant|Franchise|Associé|Fonctionnaire|Stage de lycée)/i.test(line)) return true;
+    if (/^\d+\s*(offres?|emplois?|résultats?)/i.test(line)) return true;
+    if (/^(il y a|there are|voir|see also|en savoir plus)/i.test(line)) return true;
+    if (line.length <= 2 || line.length >= 80) return true;
+    return false;
+  }
+
+  function extractCompanyFromText(text) {
+    if (!text) return "";
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const candidates = lines.filter((line) => !isLikelyNonCompanyLine(line));
+    // Hellowork cards: title on first line, company on the second.
+    if (candidates.length >= 2) return candidates[1];
+    if (candidates.length === 1) return candidates[0];
+    return "";
+  }
+
   // ── Job info from offer page DOM ───────────────────────────────────────
   function getOfferInfoFromDom() {
     const title =
       textOf(document.querySelector("h1")) ||
       textOf(document.querySelector('[data-testid*="title"]')) ||
       "Offre Hellowork";
+
     const company =
       textOf(document.querySelector('a[href*="/entreprises/"]')) ||
       textOf(document.querySelector('[class*="company"], [class*="Company"]')) ||
+      extractCompanyFromText(document.body?.innerText || "") ||
+      (() => {
+        const ogTitle = document.querySelector('meta[property="og:title"]')?.content || "";
+        const m = ogTitle.match(/(?:Recrutement par|par)\s+(.+?)(?:\s*\||$)/i);
+        return m ? m[1].trim() : "";
+      })() ||
+      (() => {
+        const pageTitle = document.title || "";
+        const m = pageTitle.match(/(?:Recrutement par|par)\s+(.+?)(?:\s*\||$)/i);
+        return m ? m[1].trim() : "";
+      })() ||
+      (() => {
+        const h1 = textOf(document.querySelector("h1"));
+        const m = h1.match(/(?:Recrutement par|par)\s+(.+?)$/i);
+        return m ? m[1].trim() : "";
+      })() ||
       "";
+
     return { title, company };
   }
 
@@ -577,6 +718,66 @@
       .trim();
   }
 
+  function isSelectPlaceholderText(text) {
+    const t = normalizeText(text);
+    if (!t) return true;
+    return /choisir|selectionn(er|ez)|veuillez|select an option|please select|^--+$/.test(t);
+  }
+
+  function isNoticePeriodQuestion(label) {
+    const t = normalizeText(label);
+    return /preavis|pre-avis|disponibilite|prise de poste|date de disponibilite|delai de demarrage/.test(t);
+  }
+
+  function findNoticePeriodOption(options, availability = "") {
+    const avail = normalizeText(availability);
+    const optionText = (o) => normalizeText((o.title || o.text || o.value || "").trim());
+
+    const findByPatterns = (patterns) => {
+      for (const re of patterns) {
+        const match = options.find((o) => re.test(optionText(o)) && !isSelectPlaceholderText(optionText(o)));
+        if (match) return match;
+      }
+      return null;
+    };
+
+    const monthMatch = avail.match(/(\d+)\s*mois/);
+    if (/immediat|des\s*que\s*possible|tout\s*de\s*suite|sans\s*preavis/.test(avail)) {
+      const immediate = findByPatterns([
+        /immediat/,
+        /sans\s*preavis/,
+        /des\s*que\s*possible/,
+        /tout\s*de\s*suite/,
+        /^0\s*mois?$/,
+      ]);
+      if (immediate) return immediate;
+    } else if (monthMatch) {
+      const months = parseInt(monthMatch[1], 10);
+      if (Number.isFinite(months)) {
+        const byMonth = findByPatterns([
+          new RegExp(`\\b${months}\\s*mois?\\b`),
+          new RegExp(`\\b${months}\\b`),
+        ]);
+        if (byMonth) return byMonth;
+      }
+    }
+
+    const ordered = findByPatterns([
+      /immediat/,
+      /sans\s*preavis/,
+      /des\s*que\s*possible/,
+      /tout\s*de\s*suite/,
+      /^0\s*mois?$/,
+      /moins\s*d.?1\s*mois/,
+      /1\s*mois/,
+      /2\s*mois/,
+      /3\s*mois/,
+    ]);
+    if (ordered) return ordered;
+
+    return options.find((o) => !isSelectPlaceholderText(optionText(o))) || null;
+  }
+
   function getProfileAge(profile) {
     const normalized = normalizeBirthDate(profile?.birthDate || "");
     const m = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -700,11 +901,13 @@
     const minLen = field.minLength > 0 ? field.minLength : 0;
     const maxLen = field.maxLength > 0 ? field.maxLength : 0;
     const hint = normalizeText(fieldHint);
+    const wantsKUnit = /\bk\s*€?\s*\/?\s*an\b|\bk€\b/.test(hint);
 
-    const wantsAnnual =
+    const wantsAnnual = !wantsKUnit && (
       /brut|annuel|annuelle|par an|hors variables|pretention|salar/.test(hint) ||
       minLen >= 5 ||
-      maxLen >= 5;
+      maxLen >= 5
+    );
 
     let candidate = wantsAnnual ? asAnnual : asK;
 
@@ -784,6 +987,46 @@
     return (explicitLabel || labelEl?.textContent || label || "").toLowerCase().trim();
   }
 
+  function getSelectLabel(el) {
+    let explicitLabel = "";
+    if (el.id) {
+      const byFor = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      explicitLabel = (byFor?.textContent || "").trim();
+    }
+    const label = el.getAttribute("aria-label") || el.name || "";
+    const parent = el.closest(".field, .form-group, [class*='form'], [class*='input'], [data-controller*='input-validity']");
+    const labelEl = parent?.querySelector("label, [class*='label']");
+    return (explicitLabel || labelEl?.textContent || label || "").toLowerCase().trim();
+  }
+
+  function listVisibleInvalidFormFields(form) {
+    if (!form) return [];
+    const names = [];
+
+    const controls = Array.from(form.querySelectorAll("input, select, textarea"));
+    for (const field of controls) {
+      if (!field || field.disabled || field.offsetParent === null) continue;
+
+      let invalid = false;
+      if (field.tagName === "SELECT") {
+        const selectedOpt = field.options?.[field.selectedIndex] || null;
+        const selectedText = (selectedOpt?.title || selectedOpt?.text || "").trim();
+        const hasMeaningfulValue = String(field.value || "").trim() !== "" && !isSelectPlaceholderText(selectedText);
+        if (field.required && !hasMeaningfulValue) invalid = true;
+      }
+
+      if (!invalid && typeof field.checkValidity === "function" && !field.checkValidity()) {
+        invalid = true;
+      }
+      if (!invalid) continue;
+
+      const label = field.tagName === "SELECT" ? getSelectLabel(field) : getFieldLabel(field);
+      names.push((label || field.getAttribute("placeholder") || field.name || field.id || "champ requis").trim());
+    }
+
+    return Array.from(new Set(names)).slice(0, 6);
+  }
+
   function setFieldValue(el, value) {
     el.focus();
     el.value = value;
@@ -797,46 +1040,49 @@
     const profile = await getProfileFromBackground();
     const profileAge = getProfileAge(profile);
     const selects = Array.from(document.querySelectorAll(
-      "select[required], select.select-error"
+      "form select, #offer-detail-step-frame select"
     ));
     let answered = 0;
 
     for (const sel of selects) {
       if (sel.disabled || sel.offsetParent === null) continue;
 
-      // Get label text: prefer label[for=id], then aria-label, then name
-      let labelText = "";
-      if (sel.id) {
-        const labelEl = document.querySelector(`label[for="${CSS.escape(sel.id)}"]`);
-        if (labelEl) labelText = labelEl.textContent.trim();
-      }
-      if (!labelText) labelText = sel.getAttribute("aria-label") || sel.name || "question";
+      const labelText = getSelectLabel(sel) || "question";
 
       // Collect non-empty, non-disabled options
       const options = Array.from(sel.options).filter(
-        (o) => o.value !== "" && !o.disabled
+        (o) => String(o.value || "").trim() !== "" && !o.disabled
       );
       if (options.length === 0) continue;
 
-      const currentValue = sel.value && sel.value !== "" ? sel.value : "";
+      const currentValue = String(sel.value || "").trim();
+      const selectedOpt = sel.options?.[sel.selectedIndex] || null;
+      const selectedText = (selectedOpt?.title || selectedOpt?.text || "").trim();
+      const currentLooksPlaceholder = !currentValue || isSelectPlaceholderText(selectedText);
       let chosenValue = null;
       let forcedByAge = false;
 
-      const normalizedLabel = String(labelText || "").toLowerCase();
+      const normalizedLabel = normalizeText(labelText || "");
 
       // Use profile birth date to answer age-range questions, even if preselected.
       if (isAgeQuestion(normalizedLabel) && Number.isFinite(profileAge)) {
         const ageOpt = findAgeOption(options, profileAge);
         if (ageOpt?.value) {
           chosenValue = ageOpt.value;
-          if (ageOpt.value === currentValue) {
+          if (ageOpt.value === currentValue && !currentLooksPlaceholder) {
             continue; // already aligned with profile age
           }
           forcedByAge = true;
         }
       }
 
-      if (currentValue && !forcedByAge) continue;
+      if (!currentLooksPlaceholder && !forcedByAge && !sel.matches(".select-error")) continue;
+
+      // Deterministic choice for notice-period fields.
+      if (!chosenValue && isNoticePeriodQuestion(normalizedLabel)) {
+        const noticeOpt = findNoticePeriodOption(options, profile?.availability || "");
+        if (noticeOpt?.value) chosenValue = noticeOpt.value;
+      }
 
       // Deterministic fallback for civility-like fields.
       if (!chosenValue && /civilit|genre|salutation|titre/i.test(normalizedLabel)) {
@@ -866,7 +1112,7 @@
           cvText: (profile?.cvText || "").slice(0, 4000),
         };
         const profileContext = JSON.stringify(profileForPrompt);
-        const optionsList = options.map((o) => `"${(o.title || o.text).trim()}"`).join(", ");
+        const optionsList = options.map((o) => `"${(o.title || o.text || o.value).trim()}"`).join(", ");
         const answer = await new Promise((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error("timeout")), 6000);
           chrome.runtime.sendMessage(
@@ -886,7 +1132,7 @@
         if (answer) {
           const ans = answer.toLowerCase();
           const match = options.find((o) => {
-            const t = (o.title || o.text).trim().toLowerCase();
+            const t = (o.title || o.text || o.value).trim().toLowerCase();
             return t === ans || t.includes(ans) || ans.includes(t);
           });
           if (match) chosenValue = match.value;
@@ -905,11 +1151,16 @@
       }
 
       if (!chosenValue) {
-        chosenValue = options[0].value;
+        const fallbackOpt = options.find((o) => !isSelectPlaceholderText((o.title || o.text || o.value || "").trim())) || options[0];
+        chosenValue = fallbackOpt.value;
         log(
-          `⚠️ IA indisponible pour "${labelText}" — réponse par défaut: "${(options[0].title || options[0].text).trim()}"`,
+          `⚠️ IA indisponible pour "${labelText}" — réponse par défaut: "${(fallbackOpt.title || fallbackOpt.text || fallbackOpt.value).trim()}"`,
           "warn"
         );
+      }
+
+      if (chosenValue === currentValue && !currentLooksPlaceholder && !forcedByAge) {
+        continue;
       }
 
       sel.value = chosenValue;
@@ -933,13 +1184,14 @@
   async function detectAndFillForm() {
     const profile = await getProfileFromBackground();
     const session = await getSession();
-    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input[type='date'], input:not([type]), textarea"));
+    const fields = Array.from(document.querySelectorAll("input[type='text'], input[type='email'], input[type='tel'], input[type='number'], input[type='date'], input:not([type]), textarea"));
     const cityValue = getProfileCity(profile) || inferCityFromSearchUrl(session?.searchUrl || "") || "Paris";
     const postalCodeValue = getProfilePostalCode(profile) || inferPostalCodeFromCity(cityValue) || "75000";
     const birthDateValue = getProfileBirthDate(profile);
     const firstNameValue = getFallbackFirstName(profile);
     const lastNameValue = getFallbackLastName(profile);
     const phoneDigits = digitsOnly(profile.phone || "");
+    const phoneValue = phoneDigits || "0600000000";
     
     let filled = 0;
     for (const field of fields) {
@@ -961,8 +1213,8 @@
         value = birthDateValue;
         shouldFill = true;
       }
-      else if (isPhoneField(fieldHint) && phoneDigits) {
-        value = phoneDigits;
+      else if (isPhoneField(fieldHint) && phoneValue) {
+        value = phoneValue;
         shouldFill = true;
       }
       else if (isEmailField(fieldHint) && profile.email) {
@@ -1012,10 +1264,13 @@
             if (!shouldFill && exactLen === 5 && postalCodeValue) {
               value = postalCodeValue;
               shouldFill = true;
-            } else if (!shouldFill && exactLen === 10 && phoneDigits) {
-              value = phoneDigits;
+            } else if (!shouldFill && isPhoneField(fieldHint) && phoneValue) {
+              value = phoneValue;
               shouldFill = true;
-            } else if (!shouldFill && postalCodeValue) {
+            } else if (!shouldFill && exactLen === 10 && phoneValue) {
+              value = phoneValue;
+              shouldFill = true;
+            } else if (!shouldFill && postalCodeValue && !isPhoneField(fieldHint)) {
               value = postalCodeValue;
               shouldFill = true;
             }
@@ -1094,8 +1349,15 @@
       if (el.offsetParent === null) continue;
       if (el.disabled) continue;
       const text = textOf(el).toLowerCase();
-      if (!text) continue;
-      if (!wanted.some((w) => text.includes(w))) continue;
+      const formAttr = (el.getAttribute("form") || "").toLowerCase();
+      const bindsMainStep = formAttr === "offer-detail-main-step-form";
+      const hasValidatorAttrs =
+        el.matches("[data-cy='submitButton']") ||
+        el.matches("[data-form-validator-target='button']") ||
+        !!el.querySelector("[data-form-validator-target='text']");
+
+      if (!text && !bindsMainStep && !hasValidatorAttrs) continue;
+      if (!wanted.some((w) => text.includes(w)) && !bindsMainStep && !hasValidatorAttrs) continue;
       if (blocked.some((b) => text.includes(b))) continue;
 
       let score = 1;
@@ -1109,6 +1371,8 @@
       if (el.tagName === "BUTTON") score += 3;
       if ((el.getAttribute("href") || "").includes("postuler")) score += 2;
       if (el.closest("#postuler, [id*='postuler'], [class*='apply'], [class*='Apply']")) score += 5;
+      if (bindsMainStep) score += 16;
+      if (hasValidatorAttrs) score += 8;
       const form = el.closest("form");
       if (form) {
         score += 8;
@@ -1121,6 +1385,77 @@
       if (score > bestScore) { bestScore = score; best = el; }
     }
     return best;
+  }
+
+  async function trySubmitOfferMainStep(settings) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const form = getVisibleOfferMainStepForm();
+      if (!form) return false;
+
+      await detectAndFillForm();
+      const selectsFilled = await answerSelectFields();
+      if (selectsFilled > 0) {
+        await sleep(jitter(400, 800));
+      }
+
+      let stepBtn = findOfferMainStepSubmitButton() || findFormSubmitButton();
+      if (!stepBtn) {
+        await sleep(jitter(500, 900));
+        stepBtn = findOfferMainStepSubmitButton() || findFormSubmitButton();
+      }
+
+      if (!stepBtn) {
+        continue;
+      }
+
+      const invalidBeforeSubmit = listVisibleInvalidFormFields(form);
+      if (invalidBeforeSubmit.length > 0) {
+        log(`⚠️ Étape profil incomplète — champs requis: ${invalidBeforeSubmit.join(", ")}`, "warn");
+        await sleep(jitter(400, 800));
+        continue;
+      }
+
+      const label = buttonLabel(stepBtn).slice(0, 80) || "Continuer ma candidature";
+      log(`Étape profil — clic: "${label}" [submit]`);
+      const beforeClickUrl = window.location.href;
+      await humanClick(stepBtn);
+      await setSession({ offerSubmitAttempted: true });
+
+      const navigated = await waitForOfferNavigation(beforeClickUrl, 9000);
+      if (navigated) return true;
+
+      await sleep(jitter(settings.delayBetweenSteps?.min ?? 1200, settings.delayBetweenSteps?.max ?? 2200));
+      const stillVisibleForm = getVisibleOfferMainStepForm();
+      if (!stillVisibleForm) return true;
+
+      const invalidAfterSubmit = listVisibleInvalidFormFields(stillVisibleForm);
+      if (invalidAfterSubmit.length > 0) {
+        log(`⚠️ Étape profil bloquée — champs invalides: ${invalidAfterSubmit.join(", ")}`, "warn");
+      }
+    }
+
+    const fallbackForm = getVisibleOfferMainStepForm();
+    if (fallbackForm && typeof fallbackForm.requestSubmit === "function") {
+      try {
+        if (typeof fallbackForm.reportValidity === "function" && !fallbackForm.reportValidity()) {
+          const invalidFallback = listVisibleInvalidFormFields(fallbackForm);
+          if (invalidFallback.length > 0) {
+            log(`⚠️ Étape profil non valide (requestSubmit): ${invalidFallback.join(", ")}`, "warn");
+          }
+          return false;
+        }
+        log("Étape profil — requestSubmit() fallback");
+        const beforeClickUrl = window.location.href;
+        fallbackForm.requestSubmit();
+        await setSession({ offerSubmitAttempted: true });
+        const navigated = await waitForOfferNavigation(beforeClickUrl, 9000);
+        if (navigated) return true;
+      } catch (_err) {
+        // Ignore and let caller continue generic flow.
+      }
+    }
+
+    return false;
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1212,81 +1547,119 @@
     const persistentApplied = stored.appliedJobs || {};
     const persistentSkipped = stored.skippedJobs || {};
 
-    const visitedOffers = session.visitedOffers || {};
-    const externalSiteOffers = session.externalSiteOffers || {};
-    const allLinks = collectOfferLinks();
-    const queue = allLinks.filter((item) => {
-      const key = item.jobId || item.url;
-      // Skip: visited this session, external site this session, OR applied/skipped in any past session
-      return !visitedOffers[key] && !externalSiteOffers[key] && !persistentApplied[key] && !persistentSkipped[key];
-    });
-
     const alreadyDone = Object.keys(persistentApplied).length + Object.keys(persistentSkipped).length;
-    log(`Page recherche: ${allLinks.length} offres, ${queue.length} nouvelles (${alreadyDone} déjà traitées toutes sessions)`);
 
-    if (queue.length === 0) {
-      const noNewOfferPages = (session.noNewOfferPages || 0) + 1;
-
-      let nextUrl = findNextPageUrl(currentSearch);
-      if (nextUrl && (!isSearchPage(nextUrl) || !isSameSearchIntent(currentSearch, nextUrl))) {
-        nextUrl = "";
-      }
-      const seenSearch = Array.from(new Set((session.visitedSearchUrls || []).map((u) => searchPageKey(u))));
-      let usedFallback = false;
-
-      if (!nextUrl) {
-        const fallbackNext = buildFallbackNextPageUrl(currentSearch);
-        if (fallbackNext) {
-          nextUrl = fallbackNext;
-          usedFallback = true;
-          log("Pagination fallback (lien suivant introuvable): " + fallbackNext, "warn");
-        }
-      }
-
-      const nextSearchKey = nextUrl ? searchPageKey(nextUrl) : "";
-
-      // When fallback keeps generating empty pages, stop after configured guard.
-      if (usedFallback && noNewOfferPages > maxNoApplyPages) {
-        await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
+    while (true) {
+      if (shouldStop) return;
+      session = await getSession();
+      if (!session?.active) return;
+      if ((session.applied || 0) >= (session.maxJobs || 25)) {
+        await endSession("Objectif session atteint");
         return;
       }
 
-      if (!nextUrl || seenSearch.includes(nextSearchKey)) {
-        if (noNewOfferPages > maxNoApplyPages) {
+      const visitedOffers = session.visitedOffers || {};
+      const externalSiteOffers = session.externalSiteOffers || {};
+      const allLinks = collectOfferLinks();
+      const queue = allLinks.filter((item) => {
+        const key = item.jobId || item.url;
+        return (
+          !visitedOffers[key] &&
+          !externalSiteOffers[key] &&
+          !persistentApplied[key] &&
+          !persistentSkipped[key]
+        );
+      });
+
+      log(
+        `Page recherche: ${allLinks.length} offres, ${queue.length} nouvelles (${alreadyDone} déjà traitées toutes sessions)`
+      );
+
+      if (queue.length === 0) {
+        const noNewOfferPages = (session.noNewOfferPages || 0) + 1;
+
+        let nextUrl = findNextPageUrl(currentSearch);
+        if (nextUrl && (!isSearchPage(nextUrl) || !isSameSearchIntent(currentSearch, nextUrl))) {
+          nextUrl = "";
+        }
+        const seenSearch = Array.from(new Set((session.visitedSearchUrls || []).map((u) => searchPageKey(u))));
+        let usedFallback = false;
+
+        if (!nextUrl) {
+          const fallbackNext = buildFallbackNextPageUrl(currentSearch);
+          if (fallbackNext) {
+            nextUrl = fallbackNext;
+            usedFallback = true;
+            log("Pagination fallback (lien suivant introuvable): " + fallbackNext, "warn");
+          }
+        }
+
+        const nextSearchKey = nextUrl ? searchPageKey(nextUrl) : "";
+
+        if (usedFallback && noNewOfferPages > maxNoApplyPages) {
           await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
-        } else {
-          await endSession("Fin: toutes les pages de résultats ont été parcourues");
+          return;
         }
+
+        if (!nextUrl || seenSearch.includes(nextSearchKey)) {
+          if (noNewOfferPages > maxNoApplyPages) {
+            await endSession(`Fin: ${noNewOfferPages} pages consécutives sans nouvelles offres`);
+          } else {
+            await endSession("Fin: toutes les pages de résultats ont été parcourues");
+          }
+          return;
+        }
+
+        await setSession({
+          currentPage: searchPageNumber(nextUrl),
+          noNewOfferPages,
+          resumeSearchUrl: nextUrl,
+          visitedSearchUrls: [...seenSearch, nextSearchKey],
+        });
+        log(`Page suivante (${noNewOfferPages}/${maxNoApplyPages} sans nouvelles): ${nextUrl}`);
+        window.location.href = nextUrl;
         return;
+      }
+
+      const target = queue[0];
+      const key = target.jobId || target.url;
+      const companyForCheck =
+        (target.company || "").trim() || extractCompanyFromText(target.title || "");
+
+      if (companyForCheck && (await isCompanyBlacklisted(companyForCheck))) {
+        await setSession({
+          phase: "search",
+          currentOfferUrl: "",
+          visitedOffers: { ...visitedOffers, [key]: true },
+        });
+        await chrome.runtime.sendMessage({
+          action: "markSkipped",
+          jobId: target.jobId,
+          title: target.title || companyForCheck,
+          url: target.url,
+          reason: `Blacklistée: ${companyForCheck}`,
+        });
+        log(`🚫 Offre ignorée (blacklist): ${companyForCheck} — ${target.title || target.url}`, "warn");
+        await sleep(jitter(400, 900));
+        continue;
       }
 
       await setSession({
-        currentPage: searchPageNumber(nextUrl),
-        noNewOfferPages,
-        resumeSearchUrl: nextUrl,
-        visitedSearchUrls: [...seenSearch, nextSearchKey],
+        phase: "offer",
+        currentOfferUrl: target.url,
+        currentJobTitle: target.title || "",
+        currentJobCompany: companyForCheck,
+        offerSubmitAttempted: false,
+        noNewOfferPages: 0,
+        resumeSearchUrl: currentSearch,
+        visitedOffers: { ...visitedOffers, [key]: true },
       });
-      log(`Page suivante (${noNewOfferPages}/${maxNoApplyPages} sans nouvelles): ${nextUrl}`);
-      window.location.href = nextUrl;
+
+      log(`Ouverture offre: ${target.title || target.url}${companyForCheck ? ` @ ${companyForCheck}` : ""}`);
+      await sleep(jitter(600, 1400));
+      window.location.href = target.url;
       return;
     }
-
-    const target = queue[0];
-    const key = target.jobId || target.url;
-    await setSession({
-      phase: "offer",
-      currentOfferUrl: target.url,
-      currentJobTitle: target.title || "",
-      currentJobCompany: "",
-      offerSubmitAttempted: false,
-      noNewOfferPages: 0,
-      resumeSearchUrl: currentSearch,
-      visitedOffers: { ...visitedOffers, [key]: true },
-    });
-
-    log("Ouverture offre: " + (target.title || target.url));
-    await sleep(jitter(600, 1400));
-    window.location.href = target.url;
   }
 
   // OFFER PAGE: click 1st apply button, then 2nd if still on page
@@ -1304,7 +1677,35 @@
       phase: "offer",
       offerSubmitAttempted: false,
     });
-    log("Offre: " + title + " @ " + company);
+    const companyForBlacklist =
+      company.trim() || extractCompanyFromText(document.body?.innerText || title);
+
+    log(
+      `Offre: "${title}" (entreprise détectée: "${company || "(non trouvée)"}", Vérification blacklist avec: "${companyForBlacklist || title}")`
+    );
+
+    if (companyForBlacklist && (await isCompanyBlacklisted(companyForBlacklist))) {
+      const visitedOffers = session.visitedOffers || {};
+      await setSession({
+        phase: "search",
+        currentOfferUrl: "",
+        visitedOffers: { ...visitedOffers, [offerKey]: true },
+      });
+      await chrome.runtime.sendMessage({
+        action: "markSkipped",
+        jobId,
+        title,
+        url: window.location.href,
+        reason: `Blacklistée: ${company}`,
+      });
+      const refreshed = await getSession();
+      const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
+      if (backUrl) {
+        await sleep(jitter(1200, 2200));
+        window.location.href = backUrl;
+      }
+      return;
+    }
 
     // External flow: "Postuler sur le site du recruteur" should be skipped to avoid leaving Hellowork.
     const recruiterBtn = findRecruiterSiteButton();
@@ -1325,9 +1726,10 @@
       });
       log("Offre ignorée (site du recruteur): " + title, "warn");
       const refreshed = await getSession();
-      if (refreshed?.searchUrl) {
+      const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
+      if (backUrl) {
         await sleep(jitter(1200, 2200));
-        window.location.href = refreshed.searchUrl;
+        window.location.href = backUrl;
       }
       return;
     }
@@ -1337,10 +1739,11 @@
       log("Ignorée (pas de bouton postuler): " + title, "warn");
       await chrome.runtime.sendMessage({ action: "markSkipped", jobId, title, url: window.location.href, reason: "Bouton postuler introuvable" });
       const refreshed = await getSession();
-      if (refreshed?.searchUrl) {
+      const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
+      if (backUrl) {
         await setSession({ phase: "search" });
         await sleep(jitter(2000, 4000));
-        window.location.href = refreshed.searchUrl;
+        window.location.href = backUrl;
       }
       return;
     }
@@ -1364,9 +1767,17 @@
     await detectAndFillForm();
     await answerSelectFields();
 
+    // Hellowork pre-step: many offers require a dedicated submit bound to
+    // #offer-detail-main-step-form before smart-apply fields appear.
+    const preStepSubmitted = await trySubmitOfferMainStep(settings);
+    if (preStepSubmitted) {
+      return;
+    }
+
     // Loop for multi-step forms (Hellowork shows "Continuer ma candidature" buttons)
     let repeatedNonSubmit = 0;
     let lastNonSubmitFingerprint = "";
+    const loopExcludeButton = firstIsSubmit ? null : firstBtn;
 
     for (let step = 0; step < 8; step++) {
       await sleep(jitter(settings.delayBetweenSteps?.min ?? 1200, settings.delayBetweenSteps?.max ?? 2200));
@@ -1379,7 +1790,10 @@
       // Extra wait if selects were just answered (let Stimulus controller validate)
       if (selectsFilled > 0) await sleep(jitter(500, 900));
 
-      const nextBtn = findFormSubmitButton() || findApplyButton();
+      const nextBtn =
+        findOfferMainStepSubmitButton() ||
+        findFormSubmitButton() ||
+        findApplyButton({ exclude: loopExcludeButton });
       if (!nextBtn) break; // No more buttons on this page
 
       const nextIsSubmit = isLikelyFormSubmitButton(nextBtn);
@@ -1414,11 +1828,12 @@
     // Safety fallback: avoid staying stuck forever on the same offer page.
     if (isOfferPage(window.location.href)) {
       const refreshed = await getSession();
-      if (refreshed?.searchUrl) {
+      const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
+      if (backUrl) {
         log("Retour recherche (aucune navigation détectée après tentative)", "warn");
         await setSession({ phase: "search", currentOfferUrl: "", offerSubmitAttempted: false });
         await sleep(jitter(1200, 2200));
-        window.location.href = refreshed.searchUrl;
+        window.location.href = backUrl;
       }
     }
     // Page navigates to multiapply → script dies → handleMultiApplyPage continues
@@ -1454,9 +1869,10 @@
         company: refreshed?.currentJobCompany || "",
         url: refreshed?.currentOfferUrl || window.location.href,
       });
-      if (refreshed?.searchUrl) {
+      const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
+      if (backUrl) {
         await setSession({ phase: "search", currentOfferUrl: "" });
-        window.location.href = refreshed.searchUrl;
+        window.location.href = backUrl;
       }
     }
     // Otherwise, page already redirected — next handler will pick up
@@ -1483,7 +1899,7 @@
       return;
     }
 
-    const backUrl = refreshed.searchUrl;
+    const backUrl = sessionSearchReturnUrl(refreshed, refreshed?.resumeSearchUrl || "");
     if (!backUrl) { await endSession("Pas d'URL de recherche en session"); return; }
 
     await setSession({ phase: "search", currentOfferUrl: "" });

@@ -1,4 +1,4 @@
-const EXT_VERSION = "1.0.23";
+const EXT_VERSION = "1.0.28";
 
 // ── Mistral AI Configuration ────────────────────────────────────────────────
 const MISTRAL_MODEL = "mistral-large-latest";
@@ -96,6 +96,7 @@ async function getState() {
     "appliedJobs",
     "skippedJobs",
     "mistralApiKey",
+    "blacklistedCompanies",
   ]);
 
   return {
@@ -109,6 +110,7 @@ async function getState() {
     appliedJobs: data.appliedJobs || {},
     skippedJobs: data.skippedJobs || {},
     mistralApiKey: data.mistralApiKey || DEFAULT_MISTRAL_API_KEY,
+    blacklistedCompanies: data.blacklistedCompanies || [],
   };
 }
 

@@ -1,7 +1,18 @@
 const $ = (id) => document.getElementById(id);
 
+function updateBlacklistCount(count) {
+  const badge = $("blacklistCount");
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count;
+    badge.style.display = "inline-flex";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
 async function load() {
-  const data = await chrome.storage.local.get(["profile", "autoApplySettings", "mistralApiKey"]);
+  const data = await chrome.storage.local.get(["profile", "autoApplySettings", "mistralApiKey", "blacklistedCompanies"]);
   const profile = data.profile || {};
   const settings = data.autoApplySettings || {};
 
@@ -20,6 +31,10 @@ async function load() {
   $("availability").value = profile.availability || "";
   $("salaryExpectation").value = profile.salaryExpectation || "";
   $("cvText").value = profile.cvText || "";
+
+  const blacklist = data.blacklistedCompanies || [];
+  $("blacklistedCompanies").value = blacklist.join("\n");
+  updateBlacklistCount(blacklist.length);
 
   // Mistral API key
   $("mistralApiKey").value = data.mistralApiKey || "";
@@ -69,7 +84,14 @@ async function save() {
     maxConsecutiveNoApplyPages: Math.min(Math.max(parseInt($("maxNoApplyPages").value, 10) || 20, 1), 50),
   };
 
-  await chrome.storage.local.set({ profile, autoApplySettings });
+  const blacklistRaw = $("blacklistedCompanies").value;
+  const blacklistedCompanies = blacklistRaw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  updateBlacklistCount(blacklistedCompanies.length);
+
+  await chrome.storage.local.set({ profile, autoApplySettings, blacklistedCompanies });
   if (mistralApiKey) {
     await chrome.storage.local.set({ mistralApiKey });
   }
@@ -80,4 +102,8 @@ async function save() {
 }
 
 document.getElementById("saveBtn").addEventListener("click", save);
+$("blacklistedCompanies").addEventListener("input", () => {
+  const lines = $("blacklistedCompanies").value.split("\n").filter((l) => l.trim().length > 0);
+  updateBlacklistCount(lines.length);
+});
 load();
